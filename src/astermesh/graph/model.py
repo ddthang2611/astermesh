@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-# phan loai dinh va canh
+# graph node and edge classifications
 class NodeType(str, Enum):
     FOLDER = "folder"
     FILE = "file"
@@ -22,21 +22,21 @@ class EdgeType(str, Enum):
     REFERENCES = "REFERENCES"
 
 
-# cau truc thuc the do thi
+# graph entity node schema
 @dataclass
 class EntityNode:
     id: str
     name: str
     node_type: NodeType
-    file_path: Optional[str] = None
-    line_start: Optional[int] = None
-    line_end: Optional[int] = None
-    parameters: List[str] = field(default_factory=list)
+    file_path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    parameters: list[str] = field(default_factory=list)
     is_async: bool = False
     is_method: bool = False
-    community_id: Optional[str] = None
+    community_id: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -51,11 +51,11 @@ class EntityNode:
         }
 
 
-# thong tin cum cong dong
+# community cluster metadata
 @dataclass
 class CommunityInfo:
     id: str
     name: str
     god_node: str
     size: int
-    members: List[str] = field(default_factory=list)
+    members: list[str] = field(default_factory=list)

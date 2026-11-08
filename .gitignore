@@ -203,3 +203,10 @@ agents
 tests
 .tests
 /tests
+
+# build and artifact outputs
+xml-graph/
+output/
+dist/
+*.xml
+*.html

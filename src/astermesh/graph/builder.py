@@ -1,12 +1,11 @@
 import os
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 import networkx as nx
 from astermesh.graph.model import EdgeType, EntityNode, NodeType
 from astermesh.parser.engine import ASTEngine, FileParseResult
 
-IGNORE_DIRS = {
+IGNORE_DIRS = frozenset({
     ".git",
     ".venv",
     "venv",
@@ -17,22 +16,30 @@ IGNORE_DIRS = {
     ".mypy_cache",
     "dist",
     "build",
-}
+})
 
 
-# quan ly do thi in-memory va cap nhat vi sai
+def is_ignored_dir(path: Path | str) -> bool:
+    parts = Path(path).parts
+    return any(p in IGNORE_DIRS or (p.startswith(".") and p not in {".", ".."}) for p in parts)
+
+
+# in-memory graph management and incremental updater
 class GraphBuilder:
     def __init__(self, root_path: Path) -> None:
         self.root_path = root_path.resolve()
         self.graph = nx.MultiDiGraph()
         self.parser = ASTEngine()
         self.lock = threading.RLock()
-        self._symbol_table: Dict[str, str] = {}
-        self._short_names: Dict[str, Set[str]] = {}
-        self._parsed_files: Dict[str, FileParseResult] = {}
-        self._file_nodes: Dict[str, Set[str]] = {}
+        self._symbol_table: dict[str, str] = {}
+        self._short_names: dict[str, set[str]] = {}
+        self._parsed_files: dict[str, FileParseResult] = {}
+        self._file_nodes: dict[str, set[str]] = {}
 
-    # dung toan bo do thi 2 pha
+    def _add_edge(self, u: str, v: str, etype: EdgeType) -> None:
+        self.graph.add_edge(u, v, key=etype.value, type=etype.value)
+
+    # construct full two-pass graph
     def build_full(self) -> nx.MultiDiGraph:
         with self.lock:
             self.graph.clear()
@@ -46,7 +53,7 @@ class GraphBuilder:
                 self._link_file_relations(self._parsed_files[rel_file])
             return self.graph
 
-    # pha 1: quet thu muc va dang ky bang ky hieu
+    # pass 1: scan directories and register symbols
     def _scan_filesystem(self) -> None:
         root_node = EntityNode(
             id=".",
@@ -57,7 +64,7 @@ class GraphBuilder:
         self.graph.add_node(".", **root_node.to_dict())
 
         for dirpath, dirnames, filenames in os.walk(self.root_path):
-            dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS and not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
             curr_dir = Path(dirpath)
             rel_dir = curr_dir.relative_to(self.root_path).as_posix()
 
@@ -70,12 +77,7 @@ class GraphBuilder:
                     file_path=rel_dir,
                 )
                 self.graph.add_node(rel_dir, **folder_node.to_dict())
-                self.graph.add_edge(
-                    parent_dir,
-                    rel_dir,
-                    key=EdgeType.CONTAINS.value,
-                    type=EdgeType.CONTAINS.value,
-                )
+                self._add_edge(parent_dir, rel_dir, EdgeType.CONTAINS)
 
             for fname in filenames:
                 fpath = curr_dir / fname
@@ -83,7 +85,7 @@ class GraphBuilder:
                     continue
                 self._index_single_file(fpath, rel_dir)
 
-    def _index_single_file(self, fpath: Path, parent_dir: str) -> Optional[str]:
+    def _index_single_file(self, fpath: Path, parent_dir: str) -> str | None:
         rel_file = fpath.relative_to(self.root_path).as_posix()
         file_node = EntityNode(
             id=rel_file,
@@ -92,12 +94,7 @@ class GraphBuilder:
             file_path=rel_file,
         )
         self.graph.add_node(rel_file, **file_node.to_dict())
-        self.graph.add_edge(
-            parent_dir,
-            rel_file,
-            key=EdgeType.CONTAINS.value,
-            type=EdgeType.CONTAINS.value,
-        )
+        self._add_edge(parent_dir, rel_file, EdgeType.CONTAINS)
 
         parsed = self.parser.parse_file(fpath, self.root_path)
         if not parsed:
@@ -105,7 +102,7 @@ class GraphBuilder:
 
         self._parsed_files[rel_file] = parsed
         self._symbol_table[parsed.module_fqn] = rel_file
-        created_nodes: Set[str] = {rel_file}
+        created_nodes: set[str] = {rel_file}
 
         for ent in parsed.entities:
             ntype = NodeType(ent.kind)
@@ -128,49 +125,29 @@ class GraphBuilder:
 
             def_source = rel_file if ent.parent_fqn == parsed.module_fqn else ent.parent_fqn
             if def_source and self.graph.has_node(def_source):
-                self.graph.add_edge(
-                    def_source,
-                    ent.fqn,
-                    key=EdgeType.DEFINES.value,
-                    type=EdgeType.DEFINES.value,
-                )
+                self._add_edge(def_source, ent.fqn, EdgeType.DEFINES)
 
         self._file_nodes[rel_file] = created_nodes
         return rel_file
 
-    # pha 2: phan giai quan he fqn
+    # pass 2: link fqn static relationships
     def _link_file_relations(self, parsed: FileParseResult) -> None:
         rel_file = parsed.file_path
         for alias, target_mod in parsed.imports.items():
             resolved = self._resolve_symbol(target_mod, parsed)
             if resolved and self.graph.has_node(resolved):
-                self.graph.add_edge(
-                    rel_file,
-                    resolved,
-                    key=EdgeType.IMPORTS.value,
-                    type=EdgeType.IMPORTS.value,
-                )
+                self._add_edge(rel_file, resolved, EdgeType.IMPORTS)
 
         for ent in parsed.entities:
             for base in ent.bases:
                 target = self._resolve_symbol(base, parsed)
                 if target and target != ent.fqn and self.graph.has_node(target):
-                    self.graph.add_edge(
-                        ent.fqn,
-                        target,
-                        key=EdgeType.INHERITS.value,
-                        type=EdgeType.INHERITS.value,
-                    )
+                    self._add_edge(ent.fqn, target, EdgeType.INHERITS)
 
             for call in ent.calls:
                 target = self._resolve_symbol(call, parsed)
                 if target and target != ent.fqn and self.graph.has_node(target):
-                    self.graph.add_edge(
-                        ent.fqn,
-                        target,
-                        key=EdgeType.CALLS.value,
-                        type=EdgeType.CALLS.value,
-                    )
+                    self._add_edge(ent.fqn, target, EdgeType.CALLS)
 
             for ref in ent.references:
                 target = self._resolve_symbol(ref, parsed)
@@ -180,15 +157,10 @@ class GraphBuilder:
                     and self.graph.has_node(target)
                     and self.graph.nodes[target].get("type") == NodeType.VARIABLE.value
                 ):
-                    self.graph.add_edge(
-                        ent.fqn,
-                        target,
-                        key=EdgeType.REFERENCES.value,
-                        type=EdgeType.REFERENCES.value,
-                    )
+                    self._add_edge(ent.fqn, target, EdgeType.REFERENCES)
 
-    def _resolve_symbol(self, raw_name: str, parsed: FileParseResult) -> Optional[str]:
-        clean = raw_name.replace("self.", "").replace("cls.", "")
+    def _resolve_symbol(self, raw_name: str, parsed: FileParseResult) -> str | None:
+        clean = raw_name.removeprefix("self.").removeprefix("cls.")
         local_candidate = f"{parsed.module_fqn}.{clean}"
         if local_candidate in self._symbol_table:
             return self._symbol_table[local_candidate]
@@ -207,13 +179,13 @@ class GraphBuilder:
             return next(iter(matches))
         return None
 
-    # cap nhat vi sai khi sua hoac xoa tep/thu muc
+    # incremental update for file modification or deletion
     def update_file(self, fpath: Path) -> None:
         with self.lock:
             rel_file = fpath.resolve().relative_to(self.root_path).as_posix()
             self.remove_path(rel_file)
             if fpath.exists() and fpath.is_file():
-                parent_dir = self._ensure_folder_hierarchy(fpath.parent)
+                parent_dir = self.ensure_folder(fpath.parent)
                 indexed = self._index_single_file(fpath, parent_dir)
                 if indexed and indexed in self._parsed_files:
                     self._link_file_relations(self._parsed_files[indexed])
@@ -236,7 +208,7 @@ class GraphBuilder:
             if self.graph.has_node(rel_path):
                 self.graph.remove_node(rel_path)
 
-    def _ensure_folder_hierarchy(self, dir_path: Path) -> str:
+    def ensure_folder(self, dir_path: Path) -> str:
         rel_dir = dir_path.resolve().relative_to(self.root_path).as_posix()
         if rel_dir == ".":
             return "."
@@ -249,11 +221,8 @@ class GraphBuilder:
                     id=nxt, name=part, node_type=NodeType.FOLDER, file_path=nxt
                 )
                 self.graph.add_node(nxt, **fnode.to_dict())
-                self.graph.add_edge(
-                    curr,
-                    nxt,
-                    key=EdgeType.CONTAINS.value,
-                    type=EdgeType.CONTAINS.value,
-                )
+                self._add_edge(curr, nxt, EdgeType.CONTAINS)
             curr = nxt
         return rel_dir
+
+    _ensure_folder_hierarchy = ensure_folder

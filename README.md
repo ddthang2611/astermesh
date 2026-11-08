@@ -1,77 +1,135 @@
 # Astermesh
 
-Deterministic Code Knowledge Graph & Local Context Layer (MCP Server) cho AI Coding Assistants.
+Deterministic Code Knowledge Graph & Local Context Layer (MCP Server) for AI Coding Assistants.
 
-## 1. Cai dat
+---
 
-Yeu cau: Python >= 3.10
+## 1. Overview
+
+Astermesh provides a **100% deterministic, static code intelligence layer** designed for LLMs, pair-programming assistants (Cursor, Claude Desktop, Antigravity), and human developers:
+- **Zero Vector Embeddings & Zero LLM Calls for Indexing**: Built purely on static AST parsing (`tree-sitter`) and in-memory graph algorithms (`networkx`, `igraph`, `leidenalg`).
+- **Dual Perspective**:
+  - **For LLMs**: Compact Semantic XML structured by Leiden community clusters to optimize attention mechanisms and eliminate token bloat.
+  - **For Humans**: Interactive 2D topological graph visualizations in standalone HTML.
+- **Absolute Line Precision**: Replaces blind `grep`/regex searches with exact physical file paths and 1-based line intervals `[line_start, line_end]`.
+- **Real-Time Incremental Updates**: In-memory graph synchronizes delta changes in milliseconds upon file save via asynchronous file watching.
+
+For comprehensive documentation, see the [User Guide](docs/guide.md).
+
+---
+
+## 2. Installation
+
+Requires Python `>= 3.10`:
 
 ```bash
-# Khoi tao moi truong ao
+# Clone and setup virtual environment
+git clone https://github.com/your-username/astermesh.git
+cd astermesh
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Cai dat dependencies o che do editable
+# Install in editable mode
 pip install -e .
 ```
 
-## 2. Cach su dung
+---
 
-### Che do CLI Snapshot (Chay thu cong)
+## 3. Usage
 
-Quet repository va tu dong xuat vao thu muc `xml-graph/` gom Semantic XML (cho AI) va ban do tuong tac 2D HTML (cho con nguoi):
+### A. CLI Snapshot Mode
+
+Analyze a repository and export Semantic XML (for LLMs), architecture report, and interactive 2D HTML (for humans) into `xml-graph/`:
 
 ```bash
-# Xuat ca XML va HTML vao thu muc xml-graph/ mac dinh
+# Build artifacts into default xml-graph/ directory
 astermesh build .
 
-# Chi xuat XML, bo qua HTML
-astermesh build . --no-html
+# Build for another target repository
+astermesh build /path/to/target/repo
 
-# Xuat vao mot thu muc khac tuy chon
-astermesh build . -o custom-output-dir
+# Skip HTML visualization (export XML & Markdown report only)
+astermesh build . --no-html
 ```
 
-Ket qua dau ra trong thu muc `xml-graph/`:
-- `xml-graph/context_graph.xml`: Ngu canh topo gom cum danh cho co che Attention cua LLM.
-- `xml-graph/astermesh_view.html`: Ban do mang luoi 2D danh cho con nguoi theo doi truc quan.
+Generated artifacts in `xml-graph/`:
+- `xml-graph/context_graph.xml`: Compact community topology for LLM attention context.
+- `xml-graph/GRAPH_REPORT.md`: Macro architecture summary for LLM working memory.
+- `xml-graph/astermesh_view.html`: Standalone interactive 2D network map.
 
-Tra cuu toa do thuc the ma nguon tu dong lenh:
-
+Locate symbols and physical lines directly from the terminal:
 ```bash
 astermesh query "GraphBuilder"
+
+# Overview statistics or list detected communities
+astermesh query --overview
+astermesh query --list-communities
 ```
 
-### Che do MCP Daemon Server (Pair Programming voi AI)
+### B. MCP Daemon Server Mode (AI Pair Programming)
 
-Khoi chay server MCP tich hop File Watcher tu dong cap nhat vi sai:
+Launch the Model Context Protocol (MCP 2.x) daemon server with live incremental file watching:
 
 ```bash
-# Chay qua stdio (danh cho Cursor, Claude Desktop, Antigravity)
+# Standard I/O transport (Cursor, Claude Desktop, Antigravity)
 astermesh serve . --transport stdio
 
-# Chay qua SSE HTTP
+# SSE HTTP transport
 astermesh serve . --transport sse --host 127.0.0.1 --port 8000
 ```
 
-### Cau hinh MCP Client (Cursor / Claude Desktop)
+#### MCP Client Configuration (`mcpServers`)
 
-Them vao file cau hinh MCP:
+Add to your Cursor or Claude Desktop MCP configuration (`mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "astermesh": {
       "command": "astermesh",
-      "args": ["serve", "/duong/dan/toi/du_an", "--transport", "stdio"]
+      "args": ["serve", "/path/to/your/project", "--transport", "stdio"]
     }
   }
 }
 ```
 
-## 3. Cac cong cu MCP cung cap
+### C. Self-Benchmark Mode
 
-- `locate_symbol`: Tim kiem dinh danh, tra ve duong dan tep va pham vi dong ma xac dinh `[line_start, line_end]`.
-- `trace_path`: Tim duong di tuong tac giua 2 thuc the logic.
-- `get_community`: Lay toan bo thuc the thuoc mot phan he chuc nang dua tren thuat toan Leiden.
-- `rebuild_graph`: Buoc quet lai toan bo do thi tren RAM khi can thiet.
+Quantify token savings and context efficiency on your own project:
+
+```bash
+astermesh benchmark /path/to/your/project --report benchmark_report.md
+```
+
+See [Benchmark Guide](docs/BENCHMARK.md) for full benchmark methodology and cost calculations.
+
+---
+
+## 4. MCP Tools & Resources
+
+### Available Tools:
+- `locate_symbol(name: str)`: Resolves physical file paths and exact line intervals `[line_start, line_end]`.
+- `get_file_outline(file_path: str)`: Extracts complete structural outline of classes, functions, and variables in a file.
+- `get_neighbors(symbol: str, direction: str = "both")`: Inspects 1-hop callers (`in`) and callees (`out`) without reading entire files.
+- `get_impact_radius(symbol: str, max_depth: int = 2)`: Computes blast radius and transitive callers to assess regression risks.
+- `trace_path(source: str, target: str)`: Computes the shortest interaction or dependency path between two logic entities.
+- `get_community(name: str)`: Retrieves all entities in an architectural community identified by the Leiden algorithm.
+- `rebuild_graph()`: Triggers a full re-scan and graph re-indexing in memory.
+
+### Available Resources:
+- `codebase://report`: Macro architecture snapshot (statistics, Leiden communities, God nodes, and dependency cycles).
+- `codebase://communities`: Summary list of all detected functional modules.
+
+---
+
+## 5. Documentation
+
+- [User Guide](docs/guide.md): Complete guide to CLI, MCP, Python API, and troubleshooting.
+- [Benchmark Guide](docs/BENCHMARK.md): Token efficiency methodology and savings calculation.
+- [AI Agent Rules](.astermesh/AGENTS.md): Graph-First navigation protocol for LLM assistants.
+
+---
+
+## 6. License
+
+[MIT License](LICENSE).

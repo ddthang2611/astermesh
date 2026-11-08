@@ -1,27 +1,49 @@
 from pathlib import Path
-from typing import Any, Dict, List
-import networkx as nx
+from typing import Any
 from mcp.server.mcpserver import MCPServer
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
 from astermesh.graph.model import CommunityInfo
+from astermesh.graph.query import GraphQuery
 from astermesh.graph.watcher import WorkspaceWatcher
+from astermesh.serializers.markdown_report import render_markdown_report
+
+SERVER_INSTRUCTIONS = """
+Astermesh provides a deterministic in-memory code knowledge graph and context layer.
+It indexes physical AST entities, call relationships, inheritance hierarchies, and functional communities (via Leiden clustering).
+
+Available MCP Resources:
+- `codebase://report`: Macro architecture snapshot (statistics, Leiden communities, God nodes, and dependency cycles).
+- `codebase://communities`: Summary list of all detected functional modules.
+
+Recommended workflow for code intelligence:
+- Use `locate_symbol` to quickly resolve file paths and exact physical line ranges [line_start, line_end] for functions, classes, or variables instead of broad text searches.
+- Use `get_file_outline` to inspect the full structural outline of a specific file without guessing symbol names.
+- Use `get_neighbors` to inspect 1-hop callers ('in') or callees ('out') of a specific entity without reading whole files.
+- Use `get_impact_radius` to compute transitive callers up to max_depth before modifying core entities (blast radius analysis).
+- Use `trace_path` to inspect shortest execution/dependency pathways between two logic entities across the codebase.
+- Use `get_community` to retrieve all entities belonging to a specific architectural subsystem or module.
+- The graph updates incrementally in real-time via file watcher. Use `rebuild_graph` only when performing manual full-rescan.
+"""
 
 
-# khoi tao mcp daemon server
+# initialize mcp daemon server
 def create_mcp_server(root_path: Path, watch: bool = True) -> MCPServer:
-    mcp = MCPServer("Astermesh")
+    mcp = MCPServer(name="Astermesh", instructions=SERVER_INSTRUCTIONS)
     builder = GraphBuilder(root_path)
     clusterer = CommunityClusterer()
-    communities: Dict[str, CommunityInfo] = {}
+    communities_list: list[CommunityInfo] = []
+    community_index: dict[str, CommunityInfo] = {}
 
     def refresh_clusters() -> None:
         with builder.lock:
             comms = clusterer.cluster(builder.graph)
-            communities.clear()
+            communities_list.clear()
+            communities_list.extend(comms)
+            community_index.clear()
             for c in comms:
-                communities[c.name.lower()] = c
-                communities[c.id.lower()] = c
+                community_index[c.name.lower()] = c
+                community_index[c.id.lower()] = c
 
     builder.build_full()
     refresh_clusters()
@@ -30,12 +52,29 @@ def create_mcp_server(root_path: Path, watch: bool = True) -> MCPServer:
         watcher = WorkspaceWatcher(builder, on_updated=refresh_clusters)
         watcher.start()
 
-    @mcp.tool()
-    def get_community(name: str) -> Dict[str, Any]:
+    # mcp resource: codebase architecture report
+    @mcp.resource("codebase://report")
+    def get_codebase_report() -> str:
         with builder.lock:
-            comm = communities.get(name.lower())
+            return render_markdown_report(builder.graph, communities_list, root_path.name)
+
+    # mcp resource: codebase communities list
+    @mcp.resource("codebase://communities")
+    def get_codebase_communities() -> str:
+        with builder.lock:
+            lines = ["# Discovered Architectural Communities"]
+            for c in communities_list:
+                lines.append(
+                    f"- Community [{c.id}] `{c.name}`: God Node=`{c.god_node}`, Size={c.size} entities"
+                )
+            return "\n".join(lines)
+
+    @mcp.tool()
+    def get_community(name: str) -> dict[str, Any]:
+        with builder.lock:
+            comm = community_index.get(name.lower())
             if not comm:
-                available = list({c.name for c in communities.values()})
+                available = [c.name for c in communities_list]
                 return {
                     "error": f"Community '{name}' not found",
                     "available_communities": available,
@@ -54,37 +93,40 @@ def create_mcp_server(root_path: Path, watch: bool = True) -> MCPServer:
             }
 
     @mcp.tool()
-    def trace_path(source: str, target: str) -> Dict[str, Any]:
+    def get_neighbors(symbol: str, direction: str = "both") -> dict[str, Any]:
         with builder.lock:
-            if not builder.graph.has_node(source) or not builder.graph.has_node(target):
-                return {"error": "Source or target node not found in graph"}
-            try:
-                path = nx.shortest_path(
-                    builder.graph.to_undirected(), source=source, target=target
-                )
-                return {"source": source, "target": target, "path": path}
-            except nx.NetworkXNoPath:
-                return {"source": source, "target": target, "path": []}
+            return GraphQuery(builder.graph).neighbors(symbol, direction)
 
     @mcp.tool()
-    def locate_symbol(name: str) -> List[Dict[str, Any]]:
+    def get_impact_radius(symbol: str, max_depth: int = 2) -> dict[str, Any]:
         with builder.lock:
-            results: List[Dict[str, Any]] = []
-            q = name.lower()
-            for nid, data in builder.graph.nodes(data=True):
-                if q in nid.lower() or q == data.get("name", "").lower():
-                    results.append(dict(data))
-            return results[:25]
+            return GraphQuery(builder.graph).impact_radius(symbol, max_depth)
 
     @mcp.tool()
-    def rebuild_graph() -> Dict[str, Any]:
-        builder.build_full()
-        refresh_clusters()
-        return {
-            "status": "rebuilt",
-            "nodes": builder.graph.number_of_nodes(),
-            "edges": builder.graph.number_of_edges(),
-            "communities": len({c.id for c in communities.values()}),
-        }
+    def get_file_outline(file_path: str) -> dict[str, Any]:
+        with builder.lock:
+            return GraphQuery(builder.graph).file_outline(file_path)
+
+    @mcp.tool()
+    def trace_path(source: str, target: str) -> dict[str, Any]:
+        with builder.lock:
+            return GraphQuery(builder.graph).trace_path(source, target)
+
+    @mcp.tool()
+    def locate_symbol(name: str) -> list[dict[str, Any]]:
+        with builder.lock:
+            return GraphQuery(builder.graph).locate(name)
+
+    @mcp.tool()
+    def rebuild_graph() -> dict[str, Any]:
+        with builder.lock:
+            builder.build_full()
+            refresh_clusters()
+            return {
+                "status": "rebuilt",
+                "nodes": builder.graph.number_of_nodes(),
+                "edges": builder.graph.number_of_edges(),
+                "communities": len(communities_list),
+            }
 
     return mcp

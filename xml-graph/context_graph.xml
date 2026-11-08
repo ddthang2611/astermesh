@@ -1,304 +1,211 @@
 <?xml version="1.0" ?>
-<codebase_knowledge_graph root="astermesh">
-  <community id="C1" name="ASTEngine" size="22">
-    <entity id="src.astermesh.parser.engine.RawEntity" type="class" file="src/astermesh/parser/engine.py" lines="12-24"/>
-    <entity id="src.astermesh.parser.engine.FileParseResult" type="class" file="src/astermesh/parser/engine.py" lines="29-33"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine" type="class" file="src/astermesh/parser/engine.py" lines="37-341"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine.__init__" type="function" file="src/astermesh/parser/engine.py" lines="38-44"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine.supports" type="function" file="src/astermesh/parser/engine.py" lines="46-47"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine.parse_file" type="function" file="src/astermesh/parser/engine.py" lines="49-69">
-      <calls target="src.astermesh.parser.engine.ASTEngine._extract_ts_js"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._extract_python"/>
-      <calls target="src.astermesh.parser.engine.FileParseResult"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._path_to_module"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine.supports"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._path_to_module" type="function" file="src/astermesh/parser/engine.py" lines="71-74"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine._text" type="function" file="src/astermesh/parser/engine.py" lines="76-77"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine._lines" type="function" file="src/astermesh/parser/engine.py" lines="79-80"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine._extract_python" type="function" file="src/astermesh/parser/engine.py" lines="83-86">
-      <calls target="src.astermesh.parser.engine.ASTEngine._walk_py_scope"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._walk_py_scope" type="function" file="src/astermesh/parser/engine.py" lines="88-107">
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_variable"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_function"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_class"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_from_import"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_import"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._parse_py_import" type="function" file="src/astermesh/parser/engine.py" lines="109-120">
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._resolve_relative_module" type="function" file="src/astermesh/parser/engine.py" lines="122-134"/>
-    <entity id="src.astermesh.parser.engine.ASTEngine._parse_py_from_import" type="function" file="src/astermesh/parser/engine.py" lines="136-153">
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._resolve_relative_module"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._parse_py_class" type="function" file="src/astermesh/parser/engine.py" lines="155-188">
-      <calls target="src.astermesh.parser.engine.ASTEngine._walk_py_scope"/>
-      <calls target="src.astermesh.parser.engine.RawEntity"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._lines"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._parse_py_function" type="function" file="src/astermesh/parser/engine.py" lines="190-242">
-      <calls target="src.astermesh.parser.engine.RawEntity"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._collect_body_usages"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._lines"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._parse_py_class"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._parse_py_variable" type="function" file="src/astermesh/parser/engine.py" lines="244-262">
-      <calls target="src.astermesh.parser.engine.RawEntity"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._lines"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._collect_body_usages" type="function" file="src/astermesh/parser/engine.py" lines="264-279">
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-    </entity>
-    <entity id="src.astermesh.parser.engine.ASTEngine._extract_ts_js" type="function" file="src/astermesh/parser/engine.py" lines="282-341">
-      <calls target="src.astermesh.parser.engine.RawEntity"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._collect_body_usages"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._lines"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine._text"/>
-    </entity>
-    <entity id="tests.test_parser.test_parse_python_code" type="function" file="tests/test_parser.py" lines="6-43">
-      <calls target="src.astermesh.parser.engine.ASTEngine.parse_file"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine"/>
-    </entity>
-    <entity id="tests.test_parser.test_relative_import_resolution" type="function" file="tests/test_parser.py" lines="47-56">
-      <calls target="src.astermesh.parser.engine.ASTEngine._resolve_relative_module"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine"/>
-    </entity>
-    <entity id="tests.test_parser.test_parse_typescript_and_javascript" type="function" file="tests/test_parser.py" lines="60-84">
-      <calls target="src.astermesh.parser.engine.ASTEngine.parse_file"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine"/>
-    </entity>
-  </community>
-  <community id="C2" name="GraphBuilder" size="15">
-    <entity id="src.astermesh.graph.builder.GraphBuilder" type="class" file="src/astermesh/graph/builder.py" lines="24-259"/>
-    <entity id="src.astermesh.graph.builder.GraphBuilder.__init__" type="function" file="src/astermesh/graph/builder.py" lines="25-33">
-      <calls target="src.astermesh.parser.engine.ASTEngine"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder.build_full" type="function" file="src/astermesh/graph/builder.py" lines="36-47">
-      <calls target="src.astermesh.graph.builder.GraphBuilder._link_file_relations"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder._scan_filesystem"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder._link_file_relations" type="function" file="src/astermesh/graph/builder.py" lines="142-188">
-      <calls target="src.astermesh.graph.builder.GraphBuilder._resolve_symbol"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder._resolve_symbol" type="function" file="src/astermesh/graph/builder.py" lines="190-208"/>
-    <entity id="src.astermesh.graph.builder.GraphBuilder.update_file" type="function" file="src/astermesh/graph/builder.py" lines="211-219">
-      <calls target="src.astermesh.graph.builder.GraphBuilder._link_file_relations"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder._index_single_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder._ensure_folder_hierarchy"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.remove_path"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder.remove_path" type="function" file="src/astermesh/graph/builder.py" lines="221-237"/>
-    <entity id="tests.test_builder.test_graph_builder_and_incremental" type="function" file="tests/test_builder.py" lines="7-36">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.remove_path"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.update_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-    <entity id="tests.test_builder.test_builder_inheritance_and_references" type="function" file="tests/test_builder.py" lines="40-68">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-    <entity id="tests.test_e2e_sandbox.test_e2e_sandbox_developer_editing_cycle" type="function" file="tests/test_e2e_sandbox.py" lines="128-153">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.remove_path"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.update_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-      <calls target="tests.test_e2e_sandbox._setup_sandbox_repository"/>
-    </entity>
-    <entity id="tests.test_hardware_performance._generate_synthetic_codebase" type="function" file="tests/test_hardware_performance.py" lines="14-39"/>
-    <entity id="tests.test_hardware_performance.test_graph_build_performance_and_ram" type="function" file="tests/test_hardware_performance.py" lines="43-81">
-      <calls target="src.astermesh.graph.watcher.WorkspaceWatcher.stop"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-      <calls target="src.astermesh.graph.watcher.WorkspaceWatcher.start"/>
-      <calls target="tests.test_hardware_performance._generate_synthetic_codebase"/>
-    </entity>
-    <entity id="tests.test_hardware_performance.test_clustering_performance" type="function" file="tests/test_hardware_performance.py" lines="85-101">
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-      <calls target="tests.test_hardware_performance._generate_synthetic_codebase"/>
-    </entity>
-    <entity id="tests.test_hardware_performance.test_incremental_delta_sync_latency" type="function" file="tests/test_hardware_performance.py" lines="105-130">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.update_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-      <calls target="tests.test_hardware_performance._generate_synthetic_codebase"/>
-    </entity>
-    <entity id="tests.test_hardware_performance.test_memory_leak_stability_audit" type="function" file="tests/test_hardware_performance.py" lines="190-226">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.update_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-      <calls target="tests.test_hardware_performance._generate_synthetic_codebase"/>
-    </entity>
-  </community>
-  <community id="C3" name="create_mcp_server" size="14">
-    <entity id="src.astermesh.cli.serve" type="function" file="src/astermesh/cli.py" lines="70-86">
-      <calls target="src.astermesh.server.create_mcp_server"/>
-    </entity>
-    <entity id="src.astermesh.server.create_mcp_server" type="function" file="src/astermesh/server.py" lines="12-203">
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.watcher.WorkspaceWatcher.start"/>
-      <calls target="src.astermesh.graph.watcher.WorkspaceWatcher"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-    <entity id="src.astermesh.graph.watcher.GraphEventHandler" type="class" file="src/astermesh/graph/watcher.py" lines="10-63"/>
-    <entity id="src.astermesh.graph.watcher.GraphEventHandler.__init__" type="function" file="src/astermesh/graph/watcher.py" lines="11-21"/>
-    <entity id="src.astermesh.graph.watcher.GraphEventHandler._is_ignored" type="function" file="src/astermesh/graph/watcher.py" lines="23-25">
-      <references target="src.astermesh.graph.builder.IGNORE_DIRS"/>
-    </entity>
-    <entity id="src.astermesh.graph.watcher.GraphEventHandler.on_any_event" type="function" file="src/astermesh/graph/watcher.py" lines="27-53">
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler._schedule_callback"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.update_file"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.remove_path"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder._ensure_folder_hierarchy"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine.supports"/>
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler._is_ignored"/>
-    </entity>
-    <entity id="src.astermesh.graph.watcher.GraphEventHandler._schedule_callback" type="function" file="src/astermesh/graph/watcher.py" lines="55-63">
-      <calls target="src.astermesh.graph.watcher.WorkspaceWatcher.start"/>
-    </entity>
-    <entity id="src.astermesh.graph.watcher.WorkspaceWatcher" type="class" file="src/astermesh/graph/watcher.py" lines="67-87"/>
-    <entity id="src.astermesh.graph.watcher.WorkspaceWatcher.__init__" type="function" file="src/astermesh/graph/watcher.py" lines="68-78">
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler"/>
-    </entity>
-    <entity id="src.astermesh.graph.watcher.WorkspaceWatcher.start" type="function" file="src/astermesh/graph/watcher.py" lines="80-83"/>
-    <entity id="src.astermesh.graph.watcher.WorkspaceWatcher.stop" type="function" file="src/astermesh/graph/watcher.py" lines="85-87"/>
-    <entity id="tests.test_hardware_performance.test_mcp_tool_latency_benchmarks" type="function" file="tests/test_hardware_performance.py" lines="134-186">
-      <calls target="src.astermesh.server.create_mcp_server"/>
-      <calls target="tests.test_hardware_performance._generate_synthetic_codebase"/>
-    </entity>
-    <entity id="tests.test_server.test_mcp_server_tools_execution" type="function" file="tests/test_server.py" lines="6-76">
-      <calls target="src.astermesh.server.create_mcp_server"/>
-    </entity>
-    <entity id="tests.test_watcher.test_watcher_event_handling" type="function" file="tests/test_watcher.py" lines="9-24">
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler.on_any_event"/>
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler._is_ignored"/>
-      <calls target="src.astermesh.graph.watcher.GraphEventHandler"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-  </community>
-  <community id="C4" name="cluster" size="13">
-    <entity id="src.astermesh.cli.build" type="function" file="src/astermesh/cli.py" lines="15-66">
-      <calls target="src.astermesh.serializers.html_visual.export_html_visual"/>
-      <calls target="src.astermesh.serializers.markdown_report.generate_markdown_report"/>
-      <calls target="src.astermesh.serializers.xml_context.export_semantic_xml"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-    <entity id="src.astermesh.cli.query" type="function" file="src/astermesh/cli.py" lines="90-142">
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder.build_full"/>
-      <calls target="src.astermesh.graph.builder.GraphBuilder"/>
-    </entity>
-    <entity id="src.astermesh.graph.clustering.LOGIC_TYPES" type="variable" file="src/astermesh/graph/clustering.py" lines="7-7"/>
-    <entity id="src.astermesh.graph.clustering.CommunityClusterer" type="class" file="src/astermesh/graph/clustering.py" lines="11-56"/>
-    <entity id="src.astermesh.graph.clustering.CommunityClusterer.cluster" type="function" file="src/astermesh/graph/clustering.py" lines="12-56">
-      <calls target="src.astermesh.graph.model.CommunityInfo"/>
-      <references target="src.astermesh.graph.clustering.LOGIC_TYPES"/>
-    </entity>
-    <entity id="src.astermesh.graph.model.CommunityInfo" type="class" file="src/astermesh/graph/model.py" lines="56-61"/>
-    <entity id="src.astermesh.serializers.html_visual.export_html_visual" type="function" file="src/astermesh/serializers/html_visual.py" lines="7-43"/>
-    <entity id="src.astermesh.serializers.markdown_report.generate_markdown_report" type="function" file="src/astermesh/serializers/markdown_report.py" lines="8-89"/>
-    <entity id="src.astermesh.serializers.xml_context.export_semantic_xml" type="function" file="src/astermesh/serializers/xml_context.py" lines="10-53"/>
-    <entity id="tests.test_clustering.test_clustering_and_god_node" type="function" file="tests/test_clustering.py" lines="7-26">
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-    </entity>
-    <entity id="tests.test_clustering.test_clustering_edge_cases" type="function" file="tests/test_clustering.py" lines="30-44">
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer.cluster"/>
-      <calls target="src.astermesh.graph.clustering.CommunityClusterer"/>
-    </entity>
-    <entity id="tests.test_serializers.test_export_semantic_xml" type="function" file="tests/test_serializers.py" lines="10-50">
-      <calls target="src.astermesh.serializers.xml_context.export_semantic_xml"/>
-      <calls target="src.astermesh.graph.model.CommunityInfo"/>
-    </entity>
-    <entity id="tests.test_serializers.test_export_html_visual" type="function" file="tests/test_serializers.py" lines="54-65">
-      <calls target="src.astermesh.serializers.html_visual.export_html_visual"/>
-    </entity>
-  </community>
-  <community id="C5" name="_scan_filesystem" size="7">
-    <entity id="src.astermesh.graph.builder.IGNORE_DIRS" type="variable" file="src/astermesh/graph/builder.py" lines="9-20"/>
-    <entity id="src.astermesh.graph.builder.GraphBuilder._scan_filesystem" type="function" file="src/astermesh/graph/builder.py" lines="50-84">
-      <calls target="src.astermesh.graph.builder.GraphBuilder._index_single_file"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine.supports"/>
-      <calls target="src.astermesh.graph.model.EntityNode.to_dict"/>
-      <calls target="src.astermesh.graph.model.EntityNode"/>
-      <references target="src.astermesh.graph.builder.IGNORE_DIRS"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder._index_single_file" type="function" file="src/astermesh/graph/builder.py" lines="86-139">
-      <calls target="src.astermesh.graph.model.EntityNode.to_dict"/>
-      <calls target="src.astermesh.graph.model.EntityNode"/>
-      <calls target="src.astermesh.graph.model.NodeType"/>
-      <calls target="src.astermesh.parser.engine.ASTEngine.parse_file"/>
-    </entity>
-    <entity id="src.astermesh.graph.builder.GraphBuilder._ensure_folder_hierarchy" type="function" file="src/astermesh/graph/builder.py" lines="239-259">
-      <calls target="src.astermesh.graph.model.EntityNode.to_dict"/>
-      <calls target="src.astermesh.graph.model.EntityNode"/>
-    </entity>
-    <entity id="src.astermesh.graph.model.NodeType" type="class" file="src/astermesh/graph/model.py" lines="7-13"/>
-    <entity id="src.astermesh.graph.model.EntityNode" type="class" file="src/astermesh/graph/model.py" lines="27-51"/>
-    <entity id="src.astermesh.graph.model.EntityNode.to_dict" type="function" file="src/astermesh/graph/model.py" lines="39-51"/>
-  </community>
-  <community id="C6" name="_setup_sandbox_repository" size="7">
-    <entity id="src.astermesh.cli.app" type="variable" file="src/astermesh/cli.py" lines="11-11"/>
-    <entity id="tests.test_cli.runner" type="variable" file="tests/test_cli.py" lines="5-5"/>
-    <entity id="tests.test_cli.test_cli_build_and_query" type="function" file="tests/test_cli.py" lines="9-37">
-      <references target="src.astermesh.cli.app"/>
-      <references target="tests.test_cli.runner"/>
-    </entity>
-    <entity id="tests.test_e2e_sandbox.runner" type="variable" file="tests/test_e2e_sandbox.py" lines="9-9"/>
-    <entity id="tests.test_e2e_sandbox._setup_sandbox_repository" type="function" file="tests/test_e2e_sandbox.py" lines="13-59"/>
-    <entity id="tests.test_e2e_sandbox.test_e2e_sandbox_cli_workflow" type="function" file="tests/test_e2e_sandbox.py" lines="63-92">
-      <calls target="tests.test_e2e_sandbox._setup_sandbox_repository"/>
-      <references target="src.astermesh.cli.app"/>
-      <references target="tests.test_e2e_sandbox.runner"/>
-    </entity>
-    <entity id="tests.test_e2e_sandbox.test_e2e_sandbox_mcp_client_and_coordinates" type="function" file="tests/test_e2e_sandbox.py" lines="96-124">
-      <calls target="src.astermesh.server.create_mcp_server"/>
-      <calls target="tests.test_e2e_sandbox._setup_sandbox_repository"/>
-    </entity>
-  </community>
-  <community id="C7" name="neighbourhoodHighlight" size="1">
-    <entity id="lib.bindings.utils.neighbourhoodHighlight" type="function" file="lib/bindings/utils.js" lines="1-98"/>
-  </community>
-  <community id="C8" name="filterHighlight" size="1">
-    <entity id="lib.bindings.utils.filterHighlight" type="function" file="lib/bindings/utils.js" lines="100-153"/>
-  </community>
-  <community id="C9" name="selectNode" size="1">
-    <entity id="lib.bindings.utils.selectNode" type="function" file="lib/bindings/utils.js" lines="155-159"/>
-  </community>
-  <community id="C10" name="selectNodes" size="1">
-    <entity id="lib.bindings.utils.selectNodes" type="function" file="lib/bindings/utils.js" lines="161-165"/>
-  </community>
-  <community id="C11" name="highlightFilter" size="1">
-    <entity id="lib.bindings.utils.highlightFilter" type="function" file="lib/bindings/utils.js" lines="167-189"/>
-  </community>
-  <community id="C12" name="__version__" size="1">
-    <entity id="src.astermesh.__version__" type="variable" file="src/astermesh/__init__.py" lines="2-2"/>
-  </community>
-  <community id="C13" name="EdgeType" size="1">
-    <entity id="src.astermesh.graph.model.EdgeType" type="class" file="src/astermesh/graph/model.py" lines="16-22"/>
-  </community>
-  <community id="C14" name="__all__" size="1">
-    <entity id="src.astermesh.graph.__all__" type="variable" file="src/astermesh/graph/__init__.py" lines="7-15"/>
-  </community>
-  <community id="C15" name="__all__" size="1">
-    <entity id="src.astermesh.parser.__all__" type="variable" file="src/astermesh/parser/__init__.py" lines="4-4"/>
-  </community>
-  <community id="C16" name="__all__" size="1">
-    <entity id="src.astermesh.serializers.__all__" type="variable" file="src/astermesh/serializers/__init__.py" lines="5-5"/>
-  </community>
-</codebase_knowledge_graph>
+<!-- Astermesh Compact Knowledge Graph
+     Legend: f=file_id, t=type (c:class, f:func, v:var), l=lines [start-end],
+             c=calls, inh=inherits, ref=references. Remote targets use 'fX:SymbolName' -->
+<c_graph root="astermesh">
+  <files>
+    <f id="f1" p="docs"/>
+    <f id="f2" p="lib"/>
+    <f id="f3" p="lib/bindings"/>
+    <f id="f4" p="lib/bindings/utils.js"/>
+    <f id="f5" p="lib/tom-select"/>
+    <f id="f6" p="lib/tom-select/tom-select.complete.min.js"/>
+    <f id="f7" p="lib/vis-9.1.2"/>
+    <f id="f8" p="lib/vis-9.1.2/vis-network.min.js"/>
+    <f id="f9" p="plan"/>
+    <f id="f10" p="src"/>
+    <f id="f11" p="src/astermesh"/>
+    <f id="f12" p="src/astermesh/cli.py"/>
+    <f id="f13" p="src/astermesh/server.py"/>
+    <f id="f14" p="src/astermesh/__init__.py"/>
+    <f id="f15" p="src/astermesh/__main__.py"/>
+    <f id="f16" p="src/astermesh/benchmark"/>
+    <f id="f17" p="src/astermesh/benchmark/runner.py"/>
+    <f id="f18" p="src/astermesh/benchmark/__init__.py"/>
+    <f id="f19" p="src/astermesh/graph"/>
+    <f id="f20" p="src/astermesh/graph/builder.py"/>
+    <f id="f21" p="src/astermesh/graph/clustering.py"/>
+    <f id="f22" p="src/astermesh/graph/model.py"/>
+    <f id="f23" p="src/astermesh/graph/query.py"/>
+    <f id="f24" p="src/astermesh/graph/watcher.py"/>
+    <f id="f25" p="src/astermesh/graph/__init__.py"/>
+    <f id="f26" p="src/astermesh/parser"/>
+    <f id="f27" p="src/astermesh/parser/engine.py"/>
+    <f id="f28" p="src/astermesh/parser/__init__.py"/>
+    <f id="f29" p="src/astermesh/serializers"/>
+    <f id="f30" p="src/astermesh/serializers/html_visual.py"/>
+    <f id="f31" p="src/astermesh/serializers/markdown_report.py"/>
+    <f id="f32" p="src/astermesh/serializers/xml_context.py"/>
+    <f id="f33" p="src/astermesh/serializers/__init__.py"/>
+    <f id="f34" p="src/astermesh.egg-info"/>
+    <f id="f35" p="tests"/>
+    <f id="f36" p="tests/test_builder.py"/>
+    <f id="f37" p="tests/test_cli.py"/>
+    <f id="f38" p="tests/test_clustering.py"/>
+    <f id="f39" p="tests/test_model.py"/>
+    <f id="f40" p="tests/test_parser.py"/>
+    <f id="f41" p="tests/test_query.py"/>
+    <f id="f42" p="tests/test_serializers.py"/>
+    <f id="f43" p="tests/test_server.py"/>
+    <f id="f44" p="tests/test_watcher.py"/>
+    <f id="f45" p="tests/__init__.py"/>
+    <f id="f46" p="xml-graph"/>
+  </files>
+  <c id="C1" name="ASTEngine" size="24">
+    <e id="__init__" t="f" f="f20" l="29-37" c="f27:ASTEngine"/>
+    <e id="RawEntity" t="c" f="f27" l="12-24"/>
+    <e id="FileParseResult" t="c" f="f27" l="29-33"/>
+    <e id="ASTEngine" t="c" f="f27" l="37-332"/>
+    <e id="__init__" t="f" f="f27" l="38-48"/>
+    <e id="supported_extensions" t="f" f="f27" l="50-52"/>
+    <e id="supports" t="f" f="f27" l="54-55"/>
+    <e id="parse_file" t="f" f="f27" l="57-77" c="_extract_ts_js,_extract_python,FileParseResult,_path_to_module,supports"/>
+    <e id="_path_to_module" t="f" f="f27" l="79-82"/>
+    <e id="_text" t="f" f="f27" l="84-90"/>
+    <e id="_lines" t="f" f="f27" l="92-93"/>
+    <e id="_extract_python" t="f" f="f27" l="96-99" c="_walk_py_scope"/>
+    <e id="_walk_py_scope" t="f" f="f27" l="101-120" c="_parse_py_variable,_parse_py_function,_parse_py_class,_parse_py_from_import,_parse_py_import"/>
+    <e id="_parse_py_import" t="f" f="f27" l="122-133" c="_text"/>
+    <e id="_resolve_relative_module" t="f" f="f27" l="135-147"/>
+    <e id="_parse_py_from_import" t="f" f="f27" l="149-166" c="_text,_resolve_relative_module"/>
+    <e id="_parse_py_class" t="f" f="f27" l="168-201" c="_walk_py_scope,RawEntity,_text,_lines"/>
+    <e id="_parse_py_function" t="f" f="f27" l="203-255" c="RawEntity,_collect_body_usages,_text,_lines,_parse_py_class"/>
+    <e id="_parse_py_variable" t="f" f="f27" l="257-275" c="RawEntity,_lines,_text"/>
+    <e id="_collect_body_usages" t="f" f="f27" l="277-292" c="_text"/>
+    <e id="_extract_ts_js" t="f" f="f27" l="295-332" c="RawEntity,_lines,_text,_collect_body_usages"/>
+    <e id="test_parser_supported_extensions" t="f" f="f40" l="5-17" c="f27:supports,f27:ASTEngine"/>
+    <e id="test_parse_python_file" t="f" f="f40" l="20-65" c="f27:parse_file,f27:ASTEngine"/>
+    <e id="test_parser_caching" t="f" f="f40" l="68-81" c="f27:parse_file,f27:ASTEngine"/>
+  </c>
+  <c id="C2" name="GraphBuilder" size="21">
+    <e id="GraphBuilder" t="c" f="f20" l="28-228"/>
+    <e id="_add_edge" t="f" f="f20" l="39-40"/>
+    <e id="build_full" t="f" f="f20" l="43-54" c="_link_file_relations,_scan_filesystem"/>
+    <e id="_scan_filesystem" t="f" f="f20" l="57-86" c="_index_single_file,f27:supports,_add_edge,f22:to_dict,f22:EntityNode,is_ignored_dir"/>
+    <e id="_index_single_file" t="f" f="f20" l="88-131" c="_add_edge,f22:to_dict,f22:EntityNode,f22:NodeType,f27:parse_file"/>
+    <e id="_link_file_relations" t="f" f="f20" l="134-160" c="_add_edge,_resolve_symbol"/>
+    <e id="_resolve_symbol" t="f" f="f20" l="162-180"/>
+    <e id="update_file" t="f" f="f20" l="183-191" c="_link_file_relations,_index_single_file,ensure_folder,remove_path"/>
+    <e id="remove_path" t="f" f="f20" l="193-209"/>
+    <e id="ensure_folder" t="f" f="f20" l="211-226" c="_add_edge,f22:to_dict,f22:EntityNode"/>
+    <e id="NodeType" t="c" f="f22" l="7-13"/>
+    <e id="EntityNode" t="c" f="f22" l="27-51"/>
+    <e id="to_dict" t="f" f="f22" l="39-51"/>
+    <e id="GraphEventHandler" t="c" f="f24" l="10-59"/>
+    <e id="__init__" t="f" f="f24" l="11-21"/>
+    <e id="on_any_event" t="f" f="f24" l="23-49" c="_schedule_callback,f20:update_file,f20:remove_path,f20:ensure_folder,f27:supports,f20:is_ignored_dir"/>
+    <e id="_schedule_callback" t="f" f="f24" l="51-59" c="start"/>
+    <e id="test_build_full_and_edges" t="f" f="f36" l="14-49" c="f20:build_full,f20:GraphBuilder"/>
+    <e id="test_incremental_update_and_removal" t="f" f="f36" l="52-74" c="f20:remove_path,f20:update_file,f20:build_full,f20:GraphBuilder"/>
+    <e id="test_entity_node_serialization" t="f" f="f39" l="4-29" c="f22:to_dict,f22:EntityNode"/>
+    <e id="test_watcher_event_handler" t="f" f="f44" l="7-34" c="f24:on_any_event,f24:GraphEventHandler,f20:build_full,f20:GraphBuilder"/>
+  </c>
+  <c id="C3" name="create_mcp_server" size="21">
+    <e id="SERVER_INSTRUCTIONS" t="v" f="f13" l="11-27"/>
+    <e id="create_mcp_server" t="f" f="f13" l="31-132" c="f20:build_full,f23:locate,f23:GraphQuery,f23:trace_path,f23:file_outline,f23:impact_radius,f23:neighbors,f31:render_markdown_report,f24:start,f24:WorkspaceWatcher,f21:cluster,f21:CommunityClusterer,f20:GraphBuilder" ref="SERVER_INSTRUCTIONS"/>
+    <e id="GraphQuery" t="c" f="f23" l="8-180"/>
+    <e id="__init__" t="f" f="f23" l="9-10"/>
+    <e id="resolve_node_id" t="f" f="f23" l="13-23"/>
+    <e id="format_node" t="f" f="f23" l="26-39"/>
+    <e id="locate" t="f" f="f23" l="42-52"/>
+    <e id="neighbors" t="f" f="f23" l="55-91" c="resolve_node_id"/>
+    <e id="impact_radius" t="f" f="f23" l="94-137" c="resolve_node_id"/>
+    <e id="file_outline" t="f" f="f23" l="140-165"/>
+    <e id="trace_path" t="f" f="f23" l="168-180" c="resolve_node_id"/>
+    <e id="WorkspaceWatcher" t="c" f="f24" l="63-83"/>
+    <e id="__init__" t="f" f="f24" l="64-74" c="GraphEventHandler"/>
+    <e id="start" t="f" f="f24" l="76-79"/>
+    <e id="stop" t="f" f="f24" l="81-83"/>
+    <e id="_build_test_graph" t="f" f="f41" l="6-18"/>
+    <e id="test_query_resolve_and_locate" t="f" f="f41" l="21-33" c="f23:locate,f23:resolve_node_id,f23:GraphQuery,_build_test_graph"/>
+    <e id="test_query_neighbors" t="f" f="f41" l="36-49" c="f23:neighbors,f23:GraphQuery,_build_test_graph"/>
+    <e id="test_query_impact_radius" t="f" f="f41" l="52-64" c="f23:impact_radius,f23:GraphQuery,_build_test_graph"/>
+    <e id="test_query_file_outline" t="f" f="f41" l="67-78" c="f23:file_outline,f23:GraphQuery,_build_test_graph"/>
+    <e id="test_query_trace_path" t="f" f="f41" l="81-90" c="f23:trace_path,f23:GraphQuery,_build_test_graph"/>
+  </c>
+  <c id="C4" name="build" size="19">
+    <e id="DEFAULT_OUTPUT_DIR" t="v" f="f12" l="12-12"/>
+    <e id="build" t="f" f="f12" l="25-69" c="f30:export_html_visual,f31:export_markdown_report,f32:export_semantic_xml,f21:cluster,f21:CommunityClusterer,f20:build_full,f20:GraphBuilder" ref="DEFAULT_OUTPUT_DIR"/>
+    <e id="query" t="f" f="f12" l="93-138" c="f23:locate,f23:GraphQuery,f21:cluster,f21:CommunityClusterer,f20:build_full,f20:GraphBuilder"/>
+    <e id="LOGIC_TYPES" t="v" f="f21" l="6-6"/>
+    <e id="CommunityClusterer" t="c" f="f21" l="10-59"/>
+    <e id="__init__" t="f" f="f21" l="11-12"/>
+    <e id="cluster" t="f" f="f21" l="14-59" c="f22:CommunityInfo" ref="LOGIC_TYPES"/>
+    <e id="CommunityInfo" t="c" f="f22" l="56-61"/>
+    <e id="export_html_visual" t="f" f="f30" l="7-44"/>
+    <e id="render_markdown_report" t="f" f="f31" l="8-66"/>
+    <e id="export_markdown_report" t="f" f="f31" l="70-79" c="render_markdown_report"/>
+    <e id="render_semantic_xml" t="f" f="f32" l="9-111" c="_render_verbose_xml"/>
+    <e id="_render_verbose_xml" t="f" f="f32" l="114-152"/>
+    <e id="export_semantic_xml" t="f" f="f32" l="156-166" c="render_semantic_xml"/>
+    <e id="test_deterministic_clustering" t="f" f="f38" l="6-38" c="f21:cluster,f21:CommunityClusterer"/>
+    <e id="test_community_info_creation" t="f" f="f39" l="32-46" c="f22:CommunityInfo"/>
+    <e id="_build_sample_graph" t="f" f="f42" l="8-17"/>
+    <e id="test_render_and_export_semantic_xml" t="f" f="f42" l="20-38" c="f32:export_semantic_xml,f32:render_semantic_xml,f22:CommunityInfo,_build_sample_graph"/>
+    <e id="test_render_and_export_markdown_report" t="f" f="f42" l="41-58" c="f31:export_markdown_report,f31:render_markdown_report,f22:CommunityInfo,_build_sample_graph"/>
+  </c>
+  <c id="C5" name="run" size="17">
+    <e id="app" t="v" f="f12" l="21-21"/>
+    <e id="serve" t="f" f="f12" l="73-89" c="f17:run,f13:create_mcp_server"/>
+    <e id="benchmark" t="f" f="f12" l="142-161" c="f17:format_markdown_report,f17:run,f17:TokenBenchmarkRunner" ref="f37:runner"/>
+    <e id="BenchmarkMetrics" t="c" f="f17" l="12-22"/>
+    <e id="TokenBenchmarkRunner" t="c" f="f17" l="26-117"/>
+    <e id="__init__" t="f" f="f17" l="27-34"/>
+    <e id="count_tokens" t="f" f="f17" l="36-42"/>
+    <e id="run" t="f" f="f17" l="44-95" c="BenchmarkMetrics,count_tokens,f32:render_semantic_xml,f21:cluster,f21:CommunityClusterer,f20:build_full,f20:is_ignored_dir,f20:GraphBuilder"/>
+    <e id="format_markdown_report" t="f" f="f17" l="97-117"/>
+    <e id="IGNORE_DIRS" t="v" f="f20" l="8-19"/>
+    <e id="is_ignored_dir" t="f" f="f20" l="22-24" ref="IGNORE_DIRS"/>
+    <e id="test_is_ignored_dir" t="f" f="f36" l="6-11" c="f20:is_ignored_dir"/>
+    <e id="runner" t="v" f="f37" l="5-5"/>
+    <e id="test_cli_build" t="f" f="f37" l="8-20" ref="f12:app,runner"/>
+    <e id="test_cli_query_overview_and_symbol" t="f" f="f37" l="23-37" ref="f12:app,runner"/>
+    <e id="test_cli_benchmark" t="f" f="f37" l="40-52" ref="f12:app,runner"/>
+    <e id="test_server_tools_and_resources" t="f" f="f43" l="6-65" c="f17:run,f13:create_mcp_server"/>
+  </c>
+  <c id="C6" name="neighbourhoodHighlight" size="1">
+    <e id="neighbourhoodHighlight" t="f" f="f4" l="1-98"/>
+  </c>
+  <c id="C7" name="filterHighlight" size="1">
+    <e id="filterHighlight" t="f" f="f4" l="100-153"/>
+  </c>
+  <c id="C8" name="selectNode" size="1">
+    <e id="selectNode" t="f" f="f4" l="155-159"/>
+  </c>
+  <c id="C9" name="selectNodes" size="1">
+    <e id="selectNodes" t="f" f="f4" l="161-165"/>
+  </c>
+  <c id="C10" name="highlightFilter" size="1">
+    <e id="highlightFilter" t="f" f="f4" l="167-189"/>
+  </c>
+  <c id="C11" name="TransportType" size="1">
+    <e id="TransportType" t="c" f="f12" l="15-18"/>
+  </c>
+  <c id="C12" name="__version__" size="1">
+    <e id="__version__" t="v" f="f14" l="6-6"/>
+  </c>
+  <c id="C13" name="__all__" size="1">
+    <e id="__all__" t="v" f="f14" l="8-17"/>
+  </c>
+  <c id="C14" name="__getattr__" size="1">
+    <e id="__getattr__" t="f" f="f14" l="20-24"/>
+  </c>
+  <c id="C15" name="__all__" size="1">
+    <e id="__all__" t="v" f="f18" l="4-4"/>
+  </c>
+  <c id="C16" name="EdgeType" size="1">
+    <e id="EdgeType" t="c" f="f22" l="16-22"/>
+  </c>
+  <c id="C17" name="__all__" size="1">
+    <e id="__all__" t="v" f="f25" l="7-15"/>
+  </c>
+  <c id="C18" name="__all__" size="1">
+    <e id="__all__" t="v" f="f28" l="4-4"/>
+  </c>
+  <c id="C19" name="__all__" size="1">
+    <e id="__all__" t="v" f="f33" l="6-6"/>
+  </c>
+  <c id="C20" name="test_edge_types" size="1">
+    <e id="test_edge_types" t="f" f="f39" l="49-56"/>
+  </c>
+</c_graph>

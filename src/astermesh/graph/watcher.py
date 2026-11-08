@@ -1,31 +1,27 @@
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-from astermesh.graph.builder import GraphBuilder, IGNORE_DIRS
+from astermesh.graph.builder import GraphBuilder, is_ignored_dir
 
 
-# xu ly su kien thay doi tep va thu muc
+# file system change event handler
 class GraphEventHandler(FileSystemEventHandler):
     def __init__(
         self,
         builder: GraphBuilder,
-        on_updated: Optional[Callable[[], None]] = None,
+        on_updated: Callable[[], None] | None = None,
         debounce_sec: float = 0.3,
     ) -> None:
         self.builder = builder
         self.on_updated = on_updated
         self.debounce_sec = debounce_sec
-        self._timer: Optional[threading.Timer] = None
+        self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
 
-    def _is_ignored(self, path_str: str) -> bool:
-        parts = Path(path_str).parts
-        return any(p in IGNORE_DIRS or p.startswith(".") for p in parts)
-
     def on_any_event(self, event: FileSystemEvent) -> None:
-        if self._is_ignored(event.src_path):
+        if is_ignored_dir(event.src_path):
             return
 
         src_path = Path(event.src_path)
@@ -43,7 +39,7 @@ class GraphEventHandler(FileSystemEventHandler):
                 self._schedule_callback()
             elif event.is_directory and event.event_type == "created":
                 with self.builder.lock:
-                    self.builder._ensure_folder_hierarchy(src_path)
+                    self.builder.ensure_folder(src_path)
                 self._schedule_callback()
         elif event.event_type == "moved":
             self.builder.remove_path(rel_path)
@@ -63,12 +59,12 @@ class GraphEventHandler(FileSystemEventHandler):
             self._timer.start()
 
 
-# quan ly tien trinh watchdog
+# workspace watchdog observer manager
 class WorkspaceWatcher:
     def __init__(
         self,
         builder: GraphBuilder,
-        on_updated: Optional[Callable[[], None]] = None,
+        on_updated: Callable[[], None] | None = None,
         debounce_sec: float = 0.3,
     ) -> None:
         self.builder = builder

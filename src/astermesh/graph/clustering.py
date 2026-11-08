@@ -1,4 +1,3 @@
-from typing import Dict, List
 import igraph as ig
 import leidenalg
 import networkx as nx
@@ -7,29 +6,33 @@ from astermesh.graph.model import CommunityInfo, NodeType
 LOGIC_TYPES = {NodeType.CLASS.value, NodeType.FUNCTION.value, NodeType.VARIABLE.value}
 
 
-# phan cum leiden va dinh vi god nodes
+# deterministic leiden clustering and god node detection
 class CommunityClusterer:
-    def cluster(self, nx_graph: nx.MultiDiGraph) -> List[CommunityInfo]:
+    def __init__(self, seed: int = 0) -> None:
+        self.seed = seed
+
+    def cluster(self, nx_graph: nx.MultiDiGraph) -> list[CommunityInfo]:
         logic_nodes = [
             n for n, data in nx_graph.nodes(data=True) if data.get("type") in LOGIC_TYPES
         ]
         if not logic_nodes:
             return []
 
-        node_to_idx: Dict[str, int] = {n: i for i, n in enumerate(logic_nodes)}
+        node_to_idx: dict[str, int] = {n: i for i, n in enumerate(logic_nodes)}
         edges = []
         for u, v, _ in nx_graph.edges(keys=True):
             if u in node_to_idx and v in node_to_idx and u != v:
                 edges.append((node_to_idx[u], node_to_idx[v]))
 
         ig_graph = ig.Graph(n=len(logic_nodes), edges=edges, directed=True)
+        # fixed seed guarantees deterministic partitions
         partition = leidenalg.find_partition(
-            ig_graph, leidenalg.ModularityVertexPartition
+            ig_graph, leidenalg.ModularityVertexPartition, seed=self.seed
         )
 
         sub_g = nx_graph.subgraph(logic_nodes)
         centrality = nx.degree_centrality(sub_g)
-        communities: List[CommunityInfo] = []
+        communities: list[CommunityInfo] = []
 
         for cid_idx, cluster_indices in enumerate(partition):
             if not cluster_indices:

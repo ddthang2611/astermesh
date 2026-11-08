@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+import sys
 import tree_sitter
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_python as tspython
 import tree_sitter_typescript as tstypescript
 
 
-# thuc the tho boc tach tu ast
+# raw entity extracted from ast
 @dataclass
 class RawEntity:
     name: str
@@ -15,38 +15,46 @@ class RawEntity:
     kind: str
     line_start: int
     line_end: int
-    parent_fqn: Optional[str] = None
-    parameters: List[str] = field(default_factory=list)
-    bases: List[str] = field(default_factory=list)
-    calls: List[str] = field(default_factory=list)
-    references: List[str] = field(default_factory=list)
+    parent_fqn: str | None = None
+    parameters: list[str] = field(default_factory=list)
+    bases: list[str] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
     is_async: bool = False
     is_method: bool = False
 
 
-# ket qua boc tach toan bo tep
+# file parsing outcome container
 @dataclass
 class FileParseResult:
     file_path: str
     module_fqn: str
-    entities: List[RawEntity] = field(default_factory=list)
-    imports: Dict[str, str] = field(default_factory=dict)
+    entities: list[RawEntity] = field(default_factory=list)
+    imports: dict[str, str] = field(default_factory=dict)
 
 
-# bo dieu phoi tree-sitter da ngon ngu
+# multi-language tree-sitter orchestrator
 class ASTEngine:
     def __init__(self) -> None:
-        self._languages: Dict[str, tree_sitter.Language] = {
+        self._languages: dict[str, tree_sitter.Language] = {
             ".py": tree_sitter.Language(tspython.language()),
             ".js": tree_sitter.Language(tsjavascript.language()),
             ".ts": tree_sitter.Language(tstypescript.language_typescript()),
             ".tsx": tree_sitter.Language(tstypescript.language_tsx()),
         }
+        # cached parser instances avoid repeated allocations
+        self._parsers: dict[str, tree_sitter.Parser] = {
+            ext: tree_sitter.Parser(lang) for ext, lang in self._languages.items()
+        }
+
+    @property
+    def supported_extensions(self) -> set[str]:
+        return set(self._languages.keys())
 
     def supports(self, ext: str) -> bool:
         return ext in self._languages
 
-    def parse_file(self, file_path: Path, root_path: Path) -> Optional[FileParseResult]:
+    def parse_file(self, file_path: Path, root_path: Path) -> FileParseResult | None:
         ext = file_path.suffix.lower()
         if not self.supports(ext):
             return None
@@ -56,7 +64,7 @@ class ASTEngine:
         except OSError:
             return None
 
-        parser = tree_sitter.Parser(self._languages[ext])
+        parser = self._parsers[ext]
         tree = parser.parse(source_bytes)
         rel_path = file_path.relative_to(root_path).as_posix()
         module_fqn = self._path_to_module(rel_path)
@@ -74,12 +82,17 @@ class ASTEngine:
         return ".".join(parts) if parts else "root"
 
     def _text(self, node: tree_sitter.Node, source: bytes) -> str:
-        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+        raw_bytes = source[node.start_byte:node.end_byte]
+        decoded = raw_bytes.decode("utf-8", errors="replace")
+        # intern short identifiers to eliminate redundant heap string allocations
+        if len(decoded) <= 64:
+            return sys.intern(decoded)
+        return decoded
 
-    def _lines(self, node: tree_sitter.Node) -> Tuple[int, int]:
+    def _lines(self, node: tree_sitter.Node) -> tuple[int, int]:
         return node.start_point[0] + 1, node.end_point[0] + 1
 
-    # boc tach ast python
+    # python ast extraction
     def _extract_python(
         self, root: tree_sitter.Node, source: bytes, scope_fqn: str, result: FileParseResult
     ) -> None:
@@ -166,7 +179,7 @@ class ASTEngine:
         name = self._text(name_node, source)
         fqn = f"{scope_fqn}.{name}"
         l_start, l_end = self._lines(node)
-        bases: List[str] = []
+        bases: list[str] = []
         superclasses = node.child_by_field_name("superclasses")
         if superclasses:
             for arg in superclasses.children:
@@ -214,7 +227,7 @@ class ASTEngine:
         l_start, l_end = self._lines(node)
         is_async = any(c.type == "async" for c in actual.children)
 
-        params: List[str] = []
+        params: list[str] = []
         params_node = actual.child_by_field_name("parameters")
         if params_node:
             for p in params_node.children:
@@ -263,9 +276,9 @@ class ASTEngine:
 
     def _collect_body_usages(
         self, node: tree_sitter.Node, source: bytes
-    ) -> Tuple[List[str], List[str]]:
-        calls: List[str] = []
-        refs: List[str] = []
+    ) -> tuple[list[str], list[str]]:
+        calls: list[str] = []
+        refs: list[str] = []
         stack = [node]
         while stack:
             curr = stack.pop()
@@ -278,7 +291,7 @@ class ASTEngine:
             stack.extend(curr.children)
         return calls, refs
 
-    # boc tach ast ts/js
+    # typescript and javascript ast extraction
     def _extract_ts_js(
         self, root: tree_sitter.Node, source: bytes, scope_fqn: str, result: FileParseResult
     ) -> None:
@@ -317,25 +330,3 @@ class ASTEngine:
                             parent_fqn=scope_fqn,
                         )
                     )
-                    body = child.child_by_field_name("body")
-                    if body:
-                        for member in body.children:
-                            if member.type == "method_definition":
-                                m_name_node = member.child_by_field_name("name")
-                                if m_name_node:
-                                    m_name = self._text(m_name_node, source)
-                                    m_start, m_end = self._lines(member)
-                                    calls, refs = self._collect_body_usages(member, source)
-                                    result.entities.append(
-                                        RawEntity(
-                                            name=m_name,
-                                            fqn=f"{fqn}.{m_name}",
-                                            kind="function",
-                                            line_start=m_start,
-                                            line_end=m_end,
-                                            parent_fqn=fqn,
-                                            calls=calls,
-                                            references=refs,
-                                            is_method=True,
-                                        )
-                                    )

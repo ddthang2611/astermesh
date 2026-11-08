@@ -2,6 +2,7 @@
 from astermesh.graph.model import NodeType, EdgeType, EntityNode, CommunityInfo
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
+from astermesh.graph.query import GraphQuery
 from astermesh.graph.watcher import WorkspaceWatcher
 
 __all__ = [
@@ -11,5 +12,7 @@ __all__ = [
     "CommunityInfo",
     "GraphBuilder",
     "CommunityClusterer",
+    "GraphQuery",
     "WorkspaceWatcher",
 ]
+

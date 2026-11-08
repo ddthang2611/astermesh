@@ -3,7 +3,7 @@ import networkx as nx
 from pyvis.network import Network
 
 
-# xuat do thi tuong tac 2d cho nguoi dung
+# export interactive 2d html visualization
 def export_html_visual(graph: nx.MultiDiGraph, output_path: Path) -> None:
     net = Network(
         height="900px",
@@ -11,6 +11,7 @@ def export_html_visual(graph: nx.MultiDiGraph, output_path: Path) -> None:
         directed=True,
         bgcolor="#1a1a1a",
         font_color="white",
+        cdn_resources="remote",
     )
     color_map = {
         "folder": "#f59e0b",
