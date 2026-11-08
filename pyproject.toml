@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astermesh"
+version = "0.1.0"
+description = "Deterministic Code Knowledge Graph & MCP Context Layer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.22.0",
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-javascript>=0.23.0",
+    "tree-sitter-typescript>=0.23.0",
+    "networkx>=3.2.0",
+    "igraph>=0.11.0",
+    "leidenalg>=0.10.0",
+    "watchdog>=4.0.0",
+    "mcp>=1.2.0",
+    "typer>=0.12.0",
+    "pyvis>=0.3.2",
+]
+
+[project.scripts]
+astermesh = "astermesh.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
