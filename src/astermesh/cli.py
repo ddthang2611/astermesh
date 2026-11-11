@@ -1,9 +1,13 @@
 from enum import Enum
 from pathlib import Path
+from typing import Annotated
+
 import typer
+
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
 from astermesh.graph.query import GraphQuery
+from astermesh.serializers.compact_wire import export_compact_wire
 from astermesh.serializers.html_visual import export_html_visual
 from astermesh.serializers.markdown_report import export_markdown_report
 from astermesh.serializers.xml_context import export_semantic_xml
@@ -18,33 +22,63 @@ class TransportType(str, Enum):
     streamable_http = "streamable-http"
 
 
+class OutputFormat(str, Enum):
+    acn = "acn"
+    xml = "xml"
+    all = "all"
+
+
+class LeidenMode(str, Enum):
+    modularity = "modularity"
+    cpm = "cpm"
+
+
 app = typer.Typer(help="Astermesh: Deterministic Code Knowledge Graph & MCP Server")
 
 
 # build snapshot command
 @app.command()
 def build(
-    path: Path = typer.Argument(Path("."), help="Workspace root directory"),
-    out_dir: Path = typer.Option(
-        Path(DEFAULT_OUTPUT_DIR),
-        "-o",
-        "--output",
-        "--output-dir",
-        help="Output directory or specific XML path for artifacts",
-    ),
-    html: Path | None = typer.Option(
-        None, "--html", help="Optional specific HTML visual path"
-    ),
-    no_html: bool = typer.Option(
-        False, "--no-html", help="Disable generating human HTML visual"
-    ),
+    path: Annotated[Path, typer.Argument(help="Workspace root directory")] = Path("."),
+    out_dir: Annotated[
+        Path,
+        typer.Option(
+            "-o",
+            "--output",
+            "--output-dir",
+            help="Output directory or specific graph artifact path",
+        ),
+    ] = Path(DEFAULT_OUTPUT_DIR),
+    fmt: Annotated[
+        OutputFormat,
+        typer.Option("--format", help="Context format: acn (dense wire), xml, or all"),
+    ] = OutputFormat.acn,
+    leiden_mode: Annotated[
+        LeidenMode,
+        typer.Option("--leiden-mode", help="Leiden objective: modularity or cpm"),
+    ] = LeidenMode.modularity,
+    html: Annotated[
+        Path | None, typer.Option("--html", help="Optional specific HTML visual path")
+    ] = None,
+    no_html: Annotated[
+        bool, typer.Option("--no-html", help="Disable generating human HTML visual")
+    ] = False,
 ) -> None:
     resolved_path = path.resolve()
-    if out_dir.suffix.lower() == ".xml":
+    ext = out_dir.suffix.lower()
+    if ext == ".xml":
         xml_path = out_dir if out_dir.is_absolute() else (resolved_path / out_dir)
         target_dir = xml_path.parent
+        acn_path = target_dir / "context_graph.acn"
+        fmt = OutputFormat.xml
+    elif ext == ".acn":
+        acn_path = out_dir if out_dir.is_absolute() else (resolved_path / out_dir)
+        target_dir = acn_path.parent
+        xml_path = target_dir / "context_graph.xml"
+        fmt = OutputFormat.acn
     else:
         target_dir = out_dir if out_dir.is_absolute() else (resolved_path / out_dir)
+        acn_path = target_dir / "context_graph.acn"
         xml_path = target_dir / "context_graph.xml"
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -53,14 +87,22 @@ def build(
 
     builder = GraphBuilder(path)
     graph = builder.build_full()
-    clusterer = CommunityClusterer()
+    clusterer = CommunityClusterer(partition_mode=leiden_mode.value)
     communities = clusterer.cluster(graph)
 
-    export_semantic_xml(graph, communities, resolved_path.name, xml_path)
+    exported_targets: list[Path] = []
+    if fmt in (OutputFormat.acn, OutputFormat.all):
+        export_compact_wire(graph, communities, resolved_path.name, acn_path)
+        exported_targets.append(acn_path)
+    if fmt in (OutputFormat.xml, OutputFormat.all):
+        export_semantic_xml(graph, communities, resolved_path.name, xml_path)
+        exported_targets.append(xml_path)
+
     export_markdown_report(graph, communities, resolved_path.name, report_path)
+    targets_str = ", ".join(str(p) for p in exported_targets)
     typer.echo(
         f"Built graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges, "
-        f"{len(communities)} communities -> {xml_path}"
+        f"{len(communities)} communities -> {targets_str}"
     )
     typer.echo(f"Exported architecture summary report -> {report_path}")
 
@@ -72,15 +114,18 @@ def build(
 # run mcp daemon server command
 @app.command()
 def serve(
-    path: Path = typer.Argument(Path("."), help="Workspace root directory"),
-    transport: TransportType = typer.Option(
-        TransportType.stdio, "--transport", help="MCP transport: stdio, sse, streamable-http"
-    ),
-    host: str = typer.Option("127.0.0.1", "--host", help="Host binding for SSE transport"),
-    port: int = typer.Option(8000, "--port", help="Port for SSE transport"),
-    no_watch: bool = typer.Option(
-        False, "--no-watch", help="Disable incremental file watcher"
-    ),
+    path: Annotated[Path, typer.Argument(help="Workspace root directory")] = Path("."),
+    transport: Annotated[
+        TransportType,
+        typer.Option("--transport", help="MCP transport: stdio, sse, streamable-http"),
+    ] = TransportType.stdio,
+    host: Annotated[
+        str, typer.Option("--host", help="Host binding for SSE transport")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Port for SSE transport")] = 8000,
+    no_watch: Annotated[
+        bool, typer.Option("--no-watch", help="Disable incremental file watcher")
+    ] = False,
 ) -> None:
     mcp = create_mcp_server(path, watch=not no_watch)
     if transport == TransportType.sse:
@@ -92,12 +137,18 @@ def serve(
 # query symbol command
 @app.command()
 def query(
-    symbol: str | None = typer.Argument(None, help="Symbol name or FQN to locate"),
-    path: Path = typer.Option(Path("."), "-p", "--path", help="Workspace root directory"),
-    overview: bool = typer.Option(False, "--overview", help="Display macro graph statistics"),
-    list_communities: bool = typer.Option(
-        False, "--list-communities", help="List detected functional communities"
-    ),
+    symbol: Annotated[
+        str | None, typer.Argument(help="Symbol name, suffix, or FQN to locate")
+    ] = None,
+    path: Annotated[
+        Path, typer.Option("-p", "--path", help="Workspace root directory")
+    ] = Path("."),
+    overview: Annotated[
+        bool, typer.Option("--overview", help="Display macro graph statistics")
+    ] = False,
+    list_communities: Annotated[
+        bool, typer.Option("--list-communities", help="List detected functional communities")
+    ] = False,
 ) -> None:
     builder = GraphBuilder(path)
     graph = builder.build_full()
@@ -141,10 +192,11 @@ def query(
 # token benchmark command
 @app.command()
 def benchmark(
-    path: Path = typer.Argument(Path("."), help="Target repository directory to benchmark"),
-    report: Path | None = typer.Option(
-        None, "-r", "--report", help="Optional markdown report output path"
-    ),
+    path: Annotated[Path, typer.Argument(help="Target repository directory to benchmark")] = Path("."),
+    report: Annotated[
+        Path | None,
+        typer.Option("-r", "--report", help="Optional markdown report output path"),
+    ] = None,
 ) -> None:
     from astermesh.benchmark.runner import TokenBenchmarkRunner
 
@@ -160,3 +212,6 @@ def benchmark(
         report.write_text(report_md, encoding="utf-8")
         typer.echo(f"Saved benchmark report to: {report}")
 
+
+if __name__ == "__main__":
+    app()

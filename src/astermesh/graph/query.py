@@ -1,6 +1,7 @@
 from collections import deque
 from pathlib import PurePosixPath
 from typing import Any
+
 import networkx as nx
 
 
@@ -9,18 +10,29 @@ class GraphQuery:
     def __init__(self, graph: nx.MultiDiGraph) -> None:
         self.graph = graph
 
-    # resolve symbol to exact node id
+    # resolve symbol to exact node id supporting dot-path suffixes
     def resolve_node_id(self, symbol: str) -> str | None:
-        # direct match in o(1)
         if self.graph.has_node(symbol):
-            return symbol
+            return str(symbol)
 
         q = symbol.lower()
-        # scan for exact name or lower fqn match
+        suffix_target = f".{q}"
+        exact_name_match: str | None = None
+        suffix_matches: list[str] = []
+
         for nid, data in self.graph.nodes(data=True):
-            if q == nid.lower() or q == (data.get("name") or "").lower():
-                return nid
-        return None
+            nid_str = str(nid)
+            nid_lower = nid_str.lower()
+            if q == nid_lower:
+                return nid_str
+            if nid_lower.endswith(suffix_target):
+                suffix_matches.append(nid_str)
+            if exact_name_match is None and q == str(data.get("name") or "").lower():
+                exact_name_match = nid_str
+
+        if suffix_matches:
+            return min(suffix_matches, key=len)
+        return exact_name_match
 
     # format node dictionary with coordinates
     def format_node(self, nid: str) -> dict[str, Any]:
@@ -35,17 +47,22 @@ class GraphQuery:
             "parameters": data.get("parameters", []),
             "is_async": data.get("is_async", False),
             "is_method": data.get("is_method", False),
+            "is_exported": data.get("is_exported", False),
             "community_id": data.get("community_id"),
         }
 
-    # locate symbols by name or fqn query
+    # locate symbols by name, suffix dot-path, or fqn query
     def locate(self, symbol: str, limit: int = 25) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         q = symbol.lower()
+        suffix_target = f".{q}"
         for nid, data in self.graph.nodes(data=True):
-            if q in nid.lower() or q == (data.get("name") or "").lower():
+            nid_str = str(nid)
+            nid_lower = nid_str.lower()
+            name_lower = str(data.get("name") or "").lower()
+            if q in nid_lower or nid_lower.endswith(suffix_target) or q == name_lower:
                 node_dict = dict(data)
-                node_dict.setdefault("id", nid)
+                node_dict.setdefault("id", nid_str)
                 results.append(node_dict)
                 if len(results) >= limit:
                     break
@@ -125,14 +142,16 @@ class GraphQuery:
                     impact_levels.setdefault(depth + 1, []).append(step_info)
 
         total_callers = len(visited) - 1
-        risk_level = "HIGH" if total_callers >= 10 else ("MEDIUM" if total_callers >= 3 else "LOW")
+        risk_level = (
+            "HIGH" if total_callers >= 10 else ("MEDIUM" if total_callers >= 3 else "LOW")
+        )
         return {
             "target_symbol": target_id,
             "max_depth_scanned": max_depth,
             "risk_level": risk_level,
             "total_affected_entities": total_callers,
             "affected_files_count": len(affected_files),
-            "affected_files": sorted(list(affected_files)),
+            "affected_files": sorted(affected_files),
             "impact_by_depth": impact_levels,
         }
 
@@ -145,13 +164,13 @@ class GraphQuery:
             node_file = data.get("file_path")
             if not node_file or node_file == ".":
                 continue
-            node_parts = PurePosixPath(node_file.replace("\\", "/").strip("/")).parts
-            # match identical or suffix segment match
+            node_parts = PurePosixPath(str(node_file).replace("\\", "/").strip("/")).parts
             if node_parts == target_parts or (
-                len(node_parts) >= len(target_parts) and node_parts[-len(target_parts):] == target_parts
+                len(node_parts) >= len(target_parts)
+                and node_parts[-len(target_parts) :] == target_parts
             ):
                 node_dict = dict(data)
-                node_dict.setdefault("id", nid)
+                node_dict.setdefault("id", str(nid))
                 matched_nodes.append(node_dict)
 
         if not matched_nodes:
@@ -172,7 +191,6 @@ class GraphQuery:
             return {"error": "Source or target node not found in graph"}
 
         try:
-            # view-only conversion avoids copying the entire graph
             undirected_view = self.graph.to_undirected(as_view=True)
             path = nx.shortest_path(undirected_view, source=src_id, target=tgt_id)
             return {"source": src_id, "target": tgt_id, "path": path}

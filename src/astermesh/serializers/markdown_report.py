@@ -1,6 +1,8 @@
 from itertools import islice
 from pathlib import Path
+
 import networkx as nx
+
 from astermesh.graph.model import CommunityInfo, EdgeType, NodeType
 
 
@@ -15,11 +17,18 @@ def render_markdown_report(
 
     type_counts: dict[str, int] = {}
     for _, data in graph.nodes(data=True):
-        ntype = data.get("type", "unknown")
+        ntype = str(data.get("type", "unknown"))
         type_counts[ntype] = type_counts.get(ntype, 0) + 1
 
-    logic_types = {NodeType.CLASS.value, NodeType.FUNCTION.value}
-    logic_nodes = [n for n, d in graph.nodes(data=True) if d.get("type") in logic_types]
+    hub_types = {
+        NodeType.CLASS.value,
+        NodeType.FUNCTION.value,
+        NodeType.COMPONENT.value,
+        NodeType.HOOK.value,
+        NodeType.SERVICE.value,
+        NodeType.MODULE.value,
+    }
+    logic_nodes = [n for n, d in graph.nodes(data=True) if d.get("type") in hub_types]
     sub_g = graph.subgraph(logic_nodes)
     degrees = dict(sub_g.degree())
     sorted_hubs = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -35,15 +44,24 @@ def render_markdown_report(
     cycles: list[list[str]] = []
     try:
         cycles = list(islice(nx.simple_cycles(file_import_graph), 3))
-    except Exception:
-        pass
+    except (nx.NetworkXError, ValueError):
+        cycles = []
+
+    breakdown_line = (
+        f"- Breakdown: {type_counts.get('class', 0)} Classes, "
+        f"{type_counts.get('function', 0)} Functions, "
+        f"{type_counts.get('component', 0)} Components, "
+        f"{type_counts.get('service', 0)} Services, "
+        f"{type_counts.get('hook', 0)} Hooks, "
+        f"{type_counts.get('asset', 0)} Assets, "
+        f"{type_counts.get('file', 0)} Files\n"
+    )
 
     lines = [
         f"# Architecture Snapshot: `{root_name}`\n",
         "## 1. Macro Statistics",
         f"- Total Elements: {total_nodes} nodes, {total_edges} relations",
-        f"- Breakdown: {type_counts.get('class', 0)} Classes, {type_counts.get('function', 0)} Functions, "
-        f"{type_counts.get('variable', 0)} Variables, {type_counts.get('file', 0)} Files\n",
+        breakdown_line,
         "## 2. Functional Communities (Leiden Clusters)",
         "| ID | Community Name | Central God Node | Size |",
         "| :--- | :--- | :--- | :--- |",

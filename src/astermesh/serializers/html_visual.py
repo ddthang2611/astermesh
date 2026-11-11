@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import networkx as nx
 from pyvis.network import Network
 
@@ -19,6 +20,13 @@ def export_html_visual(graph: nx.MultiDiGraph, output_path: Path) -> None:
         "class": "#10b981",
         "function": "#8b5cf6",
         "variable": "#6b7280",
+        "component": "#ec4899",
+        "hook": "#06b6d4",
+        "service": "#14b8a6",
+        "module": "#f97316",
+        "config": "#eab308",
+        "doc": "#a8a29e",
+        "asset": "#e11d48",
     }
 
     for node_id, data in graph.nodes(data=True):
