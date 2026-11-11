@@ -199,11 +199,6 @@ agents
 .agents
 /agents
 
-# test
-tests
-.tests
-/tests
-
 # build and artifact outputs
 xml-graph/
 output/
