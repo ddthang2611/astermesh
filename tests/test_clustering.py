@@ -50,19 +50,33 @@ def test_weighted_god_node_self_loop_exclusion_and_cpm_mode():
     g_non_logic.add_node("pyproject.toml", type=NodeType.CONFIG.value)
     assert clusterer_empty.cluster(g_non_logic) == []
 
+    # hub: it canh nhung nang (DEFINES 3.0 + INJECTS 2.5 + CALLS 1.5 = 7.0)
+    # leaf: nhieu canh hon nhung nhe (CALLS 1.5 + 5 x REFERENCES 0.8 = 5.5)
     g = nx.MultiDiGraph()
     g.add_node("hub", type=NodeType.SERVICE.value, name="HubService")
     g.add_node("leaf", type=NodeType.FUNCTION.value, name="leafFn")
-    for i in range(4):
+    g.add_node("model", type=NodeType.CLASS.value, name="Model")
+    g.add_node("repo", type=NodeType.SERVICE.value, name="Repo")
+    g.add_edge("hub", "model", type=EdgeType.DEFINES.value)
+    g.add_edge("repo", "hub", type=EdgeType.INJECTS.value)
+    g.add_edge("leaf", "hub", type=EdgeType.CALLS.value)
+    for i in range(5):
         nid = f"var_{i}"
         g.add_node(nid, type=NodeType.VARIABLE.value, name=nid)
         g.add_edge("leaf", nid, type=EdgeType.REFERENCES.value)
+    assert g.degree("leaf") > g.degree("hub")
 
-    g.add_edge("hub", "leaf", type=EdgeType.DEFINES.value)
-    g.add_edge("leaf", "hub", type=EdgeType.INJECTS.value)
+    # self-loop DEFINES 3.0 se day leaf len 8.5 neu khong bi loai
     g.add_edge("leaf", "leaf", type=EdgeType.DEFINES.value)
 
-    comms = CommunityClusterer(seed=0, partition_mode="cpm", resolution_parameter=0.1).cluster(g)
-    assert len(comms) >= 1
-    hub_comm = next(c for c in comms if "hub" in c.members)
+    comms = CommunityClusterer(seed=0, partition_mode="cpm", resolution_parameter=0.01).cluster(g)
+    assert len(comms) == 1
+    assert comms[0].size == 9
+    assert comms[0].god_node == "hub"
+    assert comms[0].name == "HubService"
+
+    # resolution cao hon tach thanh cum nho hon
+    comms_fine = CommunityClusterer(seed=0, partition_mode="cpm", resolution_parameter=0.1).cluster(g)
+    assert len(comms_fine) > len(comms)
+    hub_comm = next(c for c in comms_fine if "hub" in c.members)
     assert hub_comm.god_node == "hub"

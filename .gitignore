@@ -205,3 +205,8 @@ output/
 dist/
 *.xml
 *.html
+
+#test prj
+test-prj
+*test-prj
+/test-prj

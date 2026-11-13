@@ -6,7 +6,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from astermesh.graph.builder import GraphBuilder, is_ignored_dir, is_ignored_file
+from astermesh.graph.builder import GraphBuilder
+from astermesh.graph.filters import is_ignored_dir, is_ignored_file
 
 
 # file system change event handler

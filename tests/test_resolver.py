@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from astermesh.parser.resolver import ModuleResolver, _strip_jsonc, is_asset_path, split_bundler_query
+from astermesh.parser.resolver import (
+    ModuleResolver,
+    _strip_jsonc,
+    is_asset_path,
+    split_bundler_query,
+)
 
 
 def test_split_bundler_query():

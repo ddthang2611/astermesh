@@ -3,8 +3,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from astermesh.graph.builder import GraphBuilder, is_ignored_dir, is_ignored_file
+from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
+from astermesh.graph.filters import is_ignored_dir, is_ignored_file
 from astermesh.serializers.compact_wire import render_compact_wire
 from astermesh.serializers.xml_context import render_semantic_xml
 

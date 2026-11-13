@@ -28,6 +28,8 @@ class RawEntity:
     renders: list[str] = field(default_factory=list)
     injects: list[str] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
+    # names declared inside the callable scope (params, local const/let, inner fns)
+    local_names: set[str] = field(default_factory=set)
     is_async: bool = False
     is_method: bool = False
     is_exported: bool = False
@@ -41,4 +43,6 @@ class FileParseResult:
     entities: list[RawEntity] = field(default_factory=list)
     imports: dict[str, str] = field(default_factory=dict)
     raw_import_specs: list[ImportSpec] = field(default_factory=list)
+    # names exported via `export { a }` / `export default a` after their declaration
+    exported_names: set[str] = field(default_factory=set)
     language: str = "unknown"
