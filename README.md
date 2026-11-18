@@ -4,20 +4,35 @@
 
 Deterministic Code Knowledge Graph & Local Context Layer (MCP Server) for AI Coding Assistants.
 
+> **Official AI Agent Skill**: Install the production Graph-First Navigation & Blast-Radius Refactoring Skill for Claude Code, Cursor, Windsurf, Copilot, and Antigravity on Agensi:  
+> **[Get Astermesh Code Knowledge Graph & MCP on Agensi.io](https://www.agensi.io/skills/astermesh-code-knowledge-graph-mcp)**
+
 ---
 
 ## 1. Overview
 
-Astermesh provides a **100% deterministic, static code intelligence layer** designed for LLMs, pair-programming assistants (Cursor, Claude Desktop, Antigravity), and human developers:
-- **Zero Vector Embeddings & Zero LLM Calls for Indexing**: Built purely on static AST parsing (`tree-sitter`) and in-memory graph algorithms (`networkx`, `igraph`, `leidenalg`).
-- **Polyglot & Modern Web Ecosystem**: Supports Python, TypeScript, JavaScript, React/JSX, Vue SFC, Svelte SFC, Angular, NestJS (DI & providers), satellite configuration/documentation files (`.toml`, `.json`, `.yaml`, `.md`, `Dockerfile`, `Makefile`), and isolated static assets.
+Astermesh provides a **100% deterministic, static code intelligence layer** designed for LLMs, pair-programming assistants, and human developers:
+- **Zero Vector Embeddings & Zero LLM Calls for Indexing**: Built purely on static AST parsing with `tree-sitter` and in-memory graph algorithms with `networkx`, `igraph`, and `leidenalg`.
+- **Polyglot & Modern Web Ecosystem**: Supports Python, TypeScript, JavaScript, React/JSX, Vue SFC, Svelte SFC, Angular, NestJS DI and providers, satellite configuration and documentation files, and isolated static assets.
 - **Dual Perspective**:
   - **For LLMs**: Dense `#ACN2` wire notation structured by Leiden community clusters with optional `L0/L1/L2` token budgeting.
   - **For Humans**: Interactive 2D topological graph visualizations in standalone HTML.
 - **Absolute Line Precision**: Replaces blind `grep`/regex searches with exact physical file paths and 1-based line intervals `[line_start, line_end]`.
 - **Real-Time Incremental Updates**: In-memory graph synchronizes delta changes in milliseconds upon file save via asynchronous file watching.
 
-For comprehensive documentation, see the [User Guide](docs/guide.md).
+### Verified Performance & Token Compression Benchmarks
+
+Measured across production Python, React/Next.js, and NestJS/TypeScript repositories:
+
+| Metric | Production Benchmark Result |
+| :--- | :--- |
+| **Token Reduction: `#ACN2` vs Raw Dump** | **89.07% – 98.30% saved**, compressing `234,466` raw tokens down to `3,997` `#ACN2 L2` tokens |
+| **Indexing Throughput** | **87 – 113 files/sec** and `6,800 – 9,500 LOC/sec`, completing full build and Leiden clustering in `1.2s – 2.3s` |
+| **Peak Memory Overhead** | **6.2 MB – 12.6 MB RAM** |
+| **Incremental File-Save Sync** | **0.37 ms – 0.70 ms** per modified file |
+| **MCP Query Latency `P50`** | **0.21 ms – 0.71 ms** across symbol location, neighbor lookup, blast-radius analysis, and path tracing |
+
+For comprehensive documentation, see the [User Guide](docs/guide.md) and the [Official Agensi Skill Listing](https://www.agensi.io/skills/astermesh-code-knowledge-graph-mcp).
 
 ---
 
@@ -132,8 +147,9 @@ See [Benchmark Guide](docs/BENCHMARK.md) for full benchmark methodology and cost
 
 ---
 
-## 5. Documentation
+## 5. Documentation & Marketplace
 
+- [Official Agent Skill on Agensi.io](https://www.agensi.io/skills/astermesh-code-knowledge-graph-mcp): Ready-to-install `SKILL.md` workflow package for Claude Code, Cursor, Copilot, and 20+ coding agents.
 - [User Guide](docs/guide.md): Complete guide to CLI, MCP, Python API, and troubleshooting.
 - [Benchmark Guide](docs/BENCHMARK.md): Token efficiency methodology and savings calculation.
 - [AI Agent Rules](.astermesh/AGENTS.md): Graph-First navigation protocol for LLM assistants.
