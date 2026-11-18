@@ -141,3 +141,20 @@ def test_js_emitted_next_to_ts_source_does_not_shadow_it(tmp_path: Path):
     js_file.unlink()
     builder.update_file(js_file)  # watcher event for the emitted file
     assert g.has_node("src.foo.helper")
+def test_symlink_pointing_outside_root_is_skipped(tmp_path: Path):
+    outside = tmp_path / "shared"
+    outside.mkdir()
+    (outside / "util.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "main.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    link = proj / "util.py"
+    link.symlink_to(outside / "util.py")
+
+    builder = GraphBuilder(proj)
+    g = builder.build_full()
+
+    assert g.has_node("main.main")
+    assert not g.has_node("util.py")
+    builder.update_file(link)  # watcher path must not raise either
+    assert not g.has_node("util.py")
