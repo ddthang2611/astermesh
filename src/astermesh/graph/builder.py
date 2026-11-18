@@ -29,6 +29,19 @@ __all__ = [
     "is_test_path",
 ]
 
+_JS_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs"})
+_TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
+
+
+def _has_ts_sibling(fpath: Path) -> bool:
+    """True when `fpath` is a JS file emitted next to a same-named TS source.
+
+    Both map to the same module FQN, so indexing both makes their nodes collide.
+    """
+    if fpath.suffix.lower() not in _JS_SUFFIXES:
+        return False
+    return any(fpath.with_suffix(s).is_file() for s in _TS_SUFFIXES)
+
 
 # in-memory graph management and incremental updater
 class GraphBuilder:
@@ -100,7 +113,7 @@ class GraphBuilder:
         if is_ignored_file(fpath.name):
             return False
         if self.parser.supports(fpath.suffix.lower()):
-            return True
+            return not _has_ts_sibling(fpath)
         if not self.satellite.supports(fpath):
             return False
         # json/yaml fixtures under test folders flood the graph with config nodes

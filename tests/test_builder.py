@@ -121,3 +121,23 @@ def test_satellite_indexing_suffix_cleanup_and_asset_fallback(tmp_path: Path):
     app_file.unlink()
     builder.remove_path("App.tsx")
     assert "App.Shell.renderShell" not in builder._suffix_table.get("Shell.renderShell", set())
+
+
+def test_js_emitted_next_to_ts_source_does_not_shadow_it(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo.ts").write_text(
+        "export function helper(a: number) {\n  return a\n}\n", encoding="utf-8"
+    )
+    js_file = src / "foo.js"
+    js_file.write_text("\n\nexport function helper(a) {\n  return a\n}\n", encoding="utf-8")
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+
+    assert g.nodes["src.foo.helper"]["file_path"] == "src/foo.ts"
+    assert not g.has_node("src/foo.js")
+
+    js_file.unlink()
+    builder.update_file(js_file)  # watcher event for the emitted file
+    assert g.has_node("src.foo.helper")
