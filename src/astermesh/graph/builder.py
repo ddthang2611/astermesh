@@ -99,15 +99,16 @@ class GraphBuilder:
     def _is_indexable(self, fpath: Path) -> bool:
         if is_ignored_file(fpath.name):
             return False
+        # symlinks resolving outside the root cannot be mapped to a project path
+        try:
+            rel = fpath.resolve().relative_to(self.root_path).as_posix()
+        except ValueError:
+            return False
         if self.parser.supports(fpath.suffix.lower()):
             return True
         if not self.satellite.supports(fpath):
             return False
         # json/yaml fixtures under test folders flood the graph with config nodes
-        try:
-            rel = fpath.resolve().relative_to(self.root_path).as_posix()
-        except ValueError:
-            return False
         return not is_test_path(rel)
 
     def _index_single_file(self, fpath: Path, parent_dir: str) -> str | None:
@@ -172,7 +173,10 @@ class GraphBuilder:
     # incremental update for file modification or deletion
     def update_file(self, fpath: Path) -> None:
         with self.lock:
-            rel_file = fpath.resolve().relative_to(self.root_path).as_posix()
+            try:
+                rel_file = fpath.resolve().relative_to(self.root_path).as_posix()
+            except ValueError:
+                return
             self.remove_path(rel_file)
             if fpath.exists() and fpath.is_file() and self._is_indexable(fpath):
                 parent_dir = self.ensure_folder(fpath.parent)
