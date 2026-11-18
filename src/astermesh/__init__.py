@@ -5,7 +5,7 @@ from astermesh.graph.model import CommunityInfo, EdgeType, EntityNode, NodeType
 from astermesh.graph.query import GraphQuery
 from astermesh.parser.engine import ASTEngine
 
-__version__ = "1.3.0"
+__version__ = "1.3.2"
 
 __all__ = [
     "ASTEngine",

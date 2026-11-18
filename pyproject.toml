@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astermesh"
-version = "1.3.0"
+version = "1.3.2"
 description = "Deterministic Code Knowledge Graph & MCP Context Layer"
 readme = "README.md"
 license = { text = "MIT" }
