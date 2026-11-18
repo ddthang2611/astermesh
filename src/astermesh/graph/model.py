@@ -55,6 +55,36 @@ LOGIC_NODE_TYPES: frozenset[str] = frozenset({
     NodeType.MODULE.value,
 })
 
+CONTAINER_NODE_TYPES: frozenset[str] = frozenset({
+    NodeType.FILE.value,
+    NodeType.FOLDER.value,
+})
+
+EXCLUDED_FILE_TYPES: frozenset[str] = frozenset({
+    NodeType.FOLDER.value,
+    NodeType.ASSET.value,
+})
+
+NON_ENTITY_NODE_TYPES: frozenset[str] = frozenset({
+    NodeType.FOLDER.value,
+    NodeType.FILE.value,
+    NodeType.ASSET.value,
+    NodeType.COMMUNITY.value,
+})
+
+WIRE_EDGE_TYPES: frozenset[str] = frozenset({
+    EdgeType.INHERITS.value,
+    EdgeType.RENDERS.value,
+    EdgeType.INJECTS.value,
+    EdgeType.CALLS.value,
+    EdgeType.REFERENCES.value,
+})
+
+SEMANTIC_IMPACT_EDGES: frozenset[str] = WIRE_EDGE_TYPES | {
+    EdgeType.PROVIDES.value,
+    EdgeType.IMPORTS.value,
+}
+
 
 # graph entity node schema
 @dataclass

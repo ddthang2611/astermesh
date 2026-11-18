@@ -327,6 +327,56 @@ class RelationLinker:
         )
         return self._resolve_export_recursive(sub_path, sub_spec, visited)
 
+    def _resolve_local_alias(self, clean: str, local_aliases: dict[str, str]) -> str | None:
+        if clean in local_aliases:
+            return local_aliases[clean]
+        if "." not in clean:
+            return None
+        head, tail = clean.split(".", 1)
+        if head not in local_aliases:
+            return None
+        sym_table = self.index.symbol_table
+        head_target = local_aliases[head]
+        candidate = f"{head_target}.{tail}"
+        if candidate in sym_table:
+            return sym_table[candidate]
+        # follow namespace imports targeting barrel modules
+        node_data = self.graph.nodes.get(head_target)
+        if not node_data or node_data.get("type") != NodeType.MODULE.value:
+            return None
+        fpath = node_data.get("file_path")
+        if not fpath:
+            return None
+        member, *rest = tail.split(".", 1)
+        resolved_member = self._resolve_export_recursive(
+            fpath,
+            ImportSpec(local_name=head, raw_specifier="", imported_symbol=member),
+            set(),
+        )
+        if not resolved_member:
+            return None
+        if not rest:
+            return resolved_member
+        full_cand = f"{resolved_member}.{rest[0]}"
+        return sym_table.get(full_cand)
+
+    def _resolve_injected_member(
+        self,
+        clean: str,
+        parsed: FileParseResult,
+        local_aliases: dict[str, str] | None,
+        hint_classes: list[str],
+    ) -> str | None:
+        method_name = clean.split(".")[-1]
+        sym_table = self.index.symbol_table
+        for hcls in hint_classes:
+            cls_target = self.resolve_symbol(hcls, parsed, local_aliases)
+            if cls_target:
+                cand = f"{cls_target}.{method_name}"
+                if cand in sym_table:
+                    return cand
+        return None
+
     def resolve_symbol(
         self,
         raw_name: str,
@@ -343,37 +393,12 @@ class RelationLinker:
         if shadowed and not is_member and clean.split(".", 1)[0] in shadowed:
             return None
 
-        sym_table = self.index.symbol_table
         if local_aliases:
-            if clean in local_aliases:
-                return local_aliases[clean]
-            if "." in clean:
-                head, tail = clean.split(".", 1)
-                if head in local_aliases:
-                    head_target = local_aliases[head]
-                    candidate = f"{head_target}.{tail}"
-                    if candidate in sym_table:
-                        return sym_table[candidate]
-                    # follow namespace imports targeting barrel modules
-                    node_data = self.graph.nodes.get(head_target)
-                    if node_data and node_data.get("type") == NodeType.MODULE.value:
-                        fpath = node_data.get("file_path")
-                        if fpath:
-                            member, *rest = tail.split(".", 1)
-                            resolved_member = self._resolve_export_recursive(
-                                fpath,
-                                ImportSpec(
-                                    local_name=head, raw_specifier="", imported_symbol=member
-                                ),
-                                set(),
-                            )
-                            if resolved_member:
-                                if not rest:
-                                    return resolved_member
-                                full_cand = f"{resolved_member}.{rest[0]}"
-                                if full_cand in sym_table:
-                                    return sym_table[full_cand]
+            alias_hit = self._resolve_local_alias(clean, local_aliases)
+            if alias_hit:
+                return alias_hit
 
+        sym_table = self.index.symbol_table
         local_candidate = f"{parsed.module_fqn}.{clean}"
         if local_candidate in sym_table:
             return sym_table[local_candidate]
@@ -388,13 +413,11 @@ class RelationLinker:
 
         # try resolving member call against constructor-injected service types
         if hint_classes and "." in clean:
-            method_name = clean.split(".")[-1]
-            for hcls in hint_classes:
-                cls_target = self.resolve_symbol(hcls, parsed, local_aliases)
-                if cls_target:
-                    cand = f"{cls_target}.{method_name}"
-                    if cand in sym_table:
-                        return cand
+            injected_hit = self._resolve_injected_member(
+                clean, parsed, local_aliases, hint_classes
+            )
+            if injected_hit:
+                return injected_hit
 
         # global heuristics: only consider symbols that could plausibly be reached
         bare_js = "." not in clean and not is_member and parsed.language in _JS_LANGS

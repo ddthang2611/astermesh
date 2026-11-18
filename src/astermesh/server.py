@@ -6,19 +6,11 @@ from mcp.server.mcpserver import MCPServer
 
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
-from astermesh.graph.model import CommunityInfo, EdgeType
+from astermesh.graph.model import WIRE_EDGE_TYPES, CommunityInfo
 from astermesh.graph.query import GraphQuery
 from astermesh.graph.watcher import WorkspaceWatcher
 from astermesh.serializers.compact_wire import render_compact_wire
 from astermesh.serializers.markdown_report import render_markdown_report
-
-_SUBGRAPH_EDGE_TYPES: frozenset[str] = frozenset({
-    EdgeType.INHERITS.value,
-    EdgeType.RENDERS.value,
-    EdgeType.INJECTS.value,
-    EdgeType.CALLS.value,
-    EdgeType.REFERENCES.value,
-})
 
 
 # isolate single community with direct targets
@@ -31,7 +23,7 @@ def _build_community_subgraph(
 
     for m in comm_set:
         for _, target, edata in graph.out_edges(m, data=True):
-            if str(edata.get("type", "")) in _SUBGRAPH_EDGE_TYPES and graph.has_node(target):
+            if str(edata.get("type", "")) in WIRE_EDGE_TYPES and graph.has_node(target):
                 keep_nodes.add(target)
 
     for nid in keep_nodes:
@@ -43,7 +35,7 @@ def _build_community_subgraph(
 
     for m in comm_set:
         for _, target, edata in graph.out_edges(m, data=True):
-            if target in keep_nodes and str(edata.get("type", "")) in _SUBGRAPH_EDGE_TYPES:
+            if target in keep_nodes and str(edata.get("type", "")) in WIRE_EDGE_TYPES:
                 etype = str(edata.get("type", ""))
                 sub.add_edge(m, target, key=etype, type=etype)
 
@@ -52,20 +44,21 @@ def _build_community_subgraph(
 
 SERVER_INSTRUCTIONS = """
 Astermesh provides a deterministic in-memory code knowledge graph and context layer.
-It indexes physical AST entities (Python, JS/TS, React, Vue, Svelte, Angular), satellite configs (.toml, .json, .md), isolated assets, and functional communities.
+It indexes physical AST entities (Python, JS/TS, React, Vue, Svelte, Angular),
+satellite configs (.toml, .json, .md), isolated assets, and functional communities.
 
 Available MCP Resources:
-- `codebase://context`: Dense machine-optimized #ACN2 wire representation (L0/L1/L2) of the repository graph.
-- `codebase://report`: Macro architecture snapshot (statistics, Leiden communities, God nodes, and dependency cycles).
+- `codebase://context`: Dense #ACN2 wire representation (L0/L1/L2) of the repository graph.
+- `codebase://report`: Macro architecture snapshot (communities, God nodes, dependency cycles).
 - `codebase://communities`: Summary list of all detected functional modules.
 
 Recommended workflow for code intelligence:
 - Use `get_community_wire` to zoom into a single functional community in dense #ACN2 notation.
-- Use `locate_symbol` to resolve file paths and physical line ranges [line_start, line_end] by bare name, Class.method, or FQN.
-- Use `get_file_outline` to inspect the structural outline of any source or config/doc file (e.g. pyproject.toml, README.md, .tsx, .vue).
+- Use `locate_symbol` to resolve file paths and physical line ranges [line_start, line_end].
+- Use `get_file_outline` to inspect the structural outline of any source or config/doc file.
 - Use `read_file_snippet` to read only exact target line ranges instead of reading entire files.
-- Use `get_neighbors` to inspect 1-hop callers ('in') or callees/assets ('out') of an entity or asset.
-- Use `get_impact_radius` to compute transitive callers up to max_depth before modifying core entities or assets.
+- Use `get_neighbors` to inspect 1-hop callers ('in') or callees/assets ('out') of an entity.
+- Use `get_impact_radius` to compute transitive callers up to max_depth before modifying code.
 - Use `trace_path` to find shortest dependency pathways between two entities.
 - Use `get_community` to retrieve all entities in a functional subsystem.
 """
@@ -123,7 +116,8 @@ def create_mcp_server(
             lines = ["# Discovered Architectural Communities"]
             for c in communities_list:
                 lines.append(
-                    f"- Community [{c.id}] `{c.name}`: God Node=`{c.god_node}`, Size={c.size} entities"
+                    f"- Community [{c.id}] `{c.name}`: "
+                    f"God Node=`{c.god_node}`, Size={c.size} entities"
                 )
             return "\n".join(lines)
 
@@ -191,7 +185,7 @@ def create_mcp_server(
             direction: Edge traversal direction: 'in', 'out', or 'both' (default).
 
         Returns:
-            Dictionary containing incoming_callers and outgoing_dependencies with edge types and line coordinates.
+            Dictionary with incoming_callers and outgoing_dependencies and line coordinates.
         """
         with builder.lock:
             return GraphQuery(builder.graph).neighbors(symbol, direction)
@@ -205,27 +199,27 @@ def create_mcp_server(
             max_depth: Maximum number of reverse-dependency hops to scan (default: 2).
 
         Returns:
-            Risk assessment (LOW/MEDIUM/HIGH), affected file paths, and callers grouped by hop depth.
+            Risk assessment (LOW/MEDIUM/HIGH), affected files, and callers grouped by hop depth.
         """
         with builder.lock:
             return GraphQuery(builder.graph).impact_radius(symbol, max_depth)
 
     @mcp.tool()
     def get_file_outline(file_path: str) -> dict[str, Any]:
-        """Extract the full structural outline (classes, functions, components, hooks, config keys, doc headings) of a file.
+        """Extract the full structural outline (classes, functions, components, config) of a file.
 
         Args:
-            file_path: Workspace-relative or suffix file path (e.g. 'src/server.py', 'pyproject.toml', 'README.md').
+            file_path: Workspace-relative or suffix file path (e.g. 'src/server.py', 'README.md').
 
         Returns:
-            Sorted list of all AST or satellite entities in the file with physical [line_start, line_end] coordinates.
+            Sorted list of all AST or satellite entities with physical [line_start, line_end].
         """
         with builder.lock:
             return GraphQuery(builder.graph).file_outline(file_path)
 
     @mcp.tool()
     def trace_path(source: str, target: str) -> dict[str, Any]:
-        """Find the shortest dependency or interaction path between two entities or assets in the codebase.
+        """Find the shortest dependency or interaction path between two entities in the codebase.
 
         Args:
             source: Starting symbol name, suffix, or node ID.
@@ -239,13 +233,13 @@ def create_mcp_server(
 
     @mcp.tool()
     def locate_symbol(name: str) -> list[dict[str, Any]]:
-        """Locate code symbols, UI components, hooks, config keys, or doc headings by name, Class.method, or FQN.
+        """Locate code symbols, UI components, hooks, config keys, or doc headings by name or FQN.
 
         Args:
             name: Search query matching bare symbol name, dot-path suffix, or partial FQN.
 
         Returns:
-            Up to 25 matching entity records including file_path, node type, parameters, and [line_start, line_end].
+            Up to 25 matching entity records with file_path, type, and [line_start, line_end].
         """
         with builder.lock:
             return GraphQuery(builder.graph).locate(name)
@@ -254,10 +248,10 @@ def create_mcp_server(
     def read_file_snippet(
         file_path: str, start_line: int = 1, end_line: int | None = None
     ) -> dict[str, Any]:
-        """Read a targeted physical line slice from any source or configuration file inside the workspace.
+        """Read a targeted physical line slice from any source or configuration file in workspace.
 
         Args:
-            file_path: Relative file path within workspace root (e.g. 'pyproject.toml', 'src/astermesh/cli.py').
+            file_path: Relative file path within workspace root (e.g. 'src/astermesh/cli.py').
             start_line: 1-based starting line number (default: 1).
             end_line: 1-based inclusive ending line number (defaults to start_line + 120).
 
@@ -294,7 +288,7 @@ def create_mcp_server(
 
     @mcp.tool()
     def rebuild_graph() -> dict[str, Any]:
-        """Trigger a full two-pass re-scan and Leiden re-clustering of the workspace knowledge graph in memory.
+        """Trigger a full two-pass re-scan and Leiden re-clustering of the knowledge graph.
 
         Returns:
             Summary counts of indexed nodes, edges, and discovered architectural communities.

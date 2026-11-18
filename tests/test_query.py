@@ -7,10 +7,38 @@ from astermesh.graph.query import GraphQuery
 def _build_test_graph() -> nx.MultiDiGraph:
     g = nx.MultiDiGraph()
     # nodes
-    g.add_node("app.main", name="main", type=NodeType.FUNCTION.value, file_path="app/main.py", line_start=1, line_end=10)
-    g.add_node("app.handler", name="handler", type=NodeType.FUNCTION.value, file_path="app/main.py", line_start=12, line_end=20)
-    g.add_node("core.service", name="service", type=NodeType.CLASS.value, file_path="core/service.py", line_start=5, line_end=50)
-    g.add_node("db.query", name="query", type=NodeType.FUNCTION.value, file_path="db/client.py", line_start=1, line_end=15)
+    g.add_node(
+        "app.main",
+        name="main",
+        type=NodeType.FUNCTION.value,
+        file_path="app/main.py",
+        line_start=1,
+        line_end=10,
+    )
+    g.add_node(
+        "app.handler",
+        name="handler",
+        type=NodeType.FUNCTION.value,
+        file_path="app/main.py",
+        line_start=12,
+        line_end=20,
+    )
+    g.add_node(
+        "core.service",
+        name="service",
+        type=NodeType.CLASS.value,
+        file_path="core/service.py",
+        line_start=5,
+        line_end=50,
+    )
+    g.add_node(
+        "db.query",
+        name="query",
+        type=NodeType.FUNCTION.value,
+        file_path="db/client.py",
+        line_start=1,
+        line_end=15,
+    )
 
     # edges: main -> handler -> service -> query
     g.add_edge("app.main", "app.handler", type=EdgeType.CALLS.value)
@@ -94,15 +122,43 @@ def test_query_trace_path():
 # kiem thu query ca bien chu trinh, nguong rui ro va duong dan windows
 def test_query_edge_cases_and_cycles():
     g = nx.MultiDiGraph()
-    g.add_node("src.app.A", name="A", type=NodeType.FUNCTION.value, file_path="src/app/main.py", line_start=10, line_end=20)
-    g.add_node("src.app.B", name="B", type=NodeType.FUNCTION.value, file_path="src/app/main.py", line_start=1, line_end=8)
-    g.add_node("isolated", name="isolated", type=NodeType.FUNCTION.value, file_path="src/other.py", line_start=1, line_end=2)
+    g.add_node(
+        "src.app.A",
+        name="A",
+        type=NodeType.FUNCTION.value,
+        file_path="src/app/main.py",
+        line_start=10,
+        line_end=20,
+    )
+    g.add_node(
+        "src.app.B",
+        name="B",
+        type=NodeType.FUNCTION.value,
+        file_path="src/app/main.py",
+        line_start=1,
+        line_end=8,
+    )
+    g.add_node(
+        "isolated",
+        name="isolated",
+        type=NodeType.FUNCTION.value,
+        file_path="src/other.py",
+        line_start=1,
+        line_end=2,
+    )
     g.add_edge("src.app.A", "src.app.B", type=EdgeType.CALLS.value)
     g.add_edge("src.app.B", "src.app.A", type=EdgeType.CALLS.value)
 
     for i in range(4):
         cid = f"caller_{i}"
-        g.add_node(cid, name=cid, type=NodeType.FUNCTION.value, file_path=f"src/c{i}.py", line_start=1, line_end=2)
+        g.add_node(
+            cid,
+            name=cid,
+            type=NodeType.FUNCTION.value,
+            file_path=f"src/c{i}.py",
+            line_start=1,
+            line_end=2,
+        )
         g.add_edge(cid, "src.app.B", type=EdgeType.CALLS.value)
 
     q = GraphQuery(g)

@@ -5,12 +5,9 @@ from xml.dom import minidom
 
 import networkx as nx
 
-from astermesh.graph.model import CommunityInfo, EdgeType, NodeType
+from astermesh.graph.model import EXCLUDED_FILE_TYPES, CommunityInfo, EdgeType, NodeType
 
-_EXCLUDED_FILE_TYPES: frozenset[str] = frozenset({
-    NodeType.FOLDER.value,
-    NodeType.ASSET.value,
-})
+_EXCLUDED_FILE_TYPES = EXCLUDED_FILE_TYPES
 
 
 def _warn_legacy_xml(func_name: str) -> None:

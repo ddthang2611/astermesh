@@ -2,6 +2,7 @@ from pathlib import Path
 
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.model import EdgeType, NodeType
+from astermesh.parser.engine import ASTEngine
 
 
 def test_ts_arrow_functions_calls_and_imports(tmp_path: Path):
@@ -313,5 +314,77 @@ export class AppModule {}
     assert ("CardComponent.CardComponent", EdgeType.PROVIDES.value) in mod_edges
     assert ("ConfigService.ConfigService", EdgeType.PROVIDES.value) in mod_edges
 
-    card_edges = [(v, d["type"]) for _, v, d in g.out_edges("CardComponent.CardComponent", data=True)]
+    card_edges = [
+        (v, d["type"]) for _, v, d in g.out_edges("CardComponent.CardComponent", data=True)
+    ]
     assert ("ConfigService.ConfigService", EdgeType.INJECTS.value) in card_edges
+
+
+def test_vue_nested_template_keeps_all_rendered_components(tmp_path: Path):
+    (tmp_path / "App.vue").write_text(
+        """<template>
+  <div>
+    <template v-if="ok"><HeaderBar /></template>
+    <UserList />
+    <template #footer><FooterBar /></template>
+  </div>
+</template>
+<script setup lang="ts">
+const tpl = "</template><NotAComponent />";
+</script>
+""",
+        encoding="utf-8",
+    )
+
+    parsed = ASTEngine().parse_file(tmp_path / "App.vue", tmp_path)
+
+    assert parsed is not None
+    comp = next(e for e in parsed.entities if e.kind == NodeType.COMPONENT.value)
+    assert comp.renders == ["HeaderBar", "UserList", "FooterBar"]
+
+
+# strip style and comments in vue
+def test_vue_sfc_strips_style_and_html_comments_before_template(tmp_path: Path):
+    (tmp_path / "App.vue").write_text(
+        """<template>
+  <div>
+    <!-- <HiddenInComment /> -->
+    <RealCard />
+  </div>
+</template>
+<!-- <CommentedOut /> </template> <FakeCard /> -->
+<style scoped>
+/* </template> <StyleFake /> */
+.box { color: red; }
+</style>
+<script setup lang="ts">
+function init() {
+  return 1;
+}
+</script>
+""",
+        encoding="utf-8",
+    )
+
+    parsed = ASTEngine().parse_file(tmp_path / "App.vue", tmp_path)
+
+    assert parsed is not None
+    comp = next(e for e in parsed.entities if e.kind == NodeType.COMPONENT.value)
+    assert comp.renders == ["RealCard"]
+    init_fn = next(e for e in parsed.entities if e.name == "init")
+    assert init_fn.line_start == 13
+
+    (tmp_path / "View.svelte").write_text(
+        """<script lang="ts">
+const s = "<FakeInScript />";
+</script>
+<!-- <FakeInComment /> -->
+<style>/* <FakeInStyle /> */</style>
+<section><RealBanner /></section>
+""",
+        encoding="utf-8",
+    )
+    svelte_res = ASTEngine().parse_file(tmp_path / "View.svelte", tmp_path)
+    assert svelte_res is not None
+    svelte_comp = next(e for e in svelte_res.entities if e.kind == NodeType.COMPONENT.value)
+    assert svelte_comp.renders == ["RealBanner"]

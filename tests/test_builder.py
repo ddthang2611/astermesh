@@ -123,6 +123,33 @@ def test_satellite_indexing_suffix_cleanup_and_asset_fallback(tmp_path: Path):
     assert "App.Shell.renderShell" not in builder._suffix_table.get("Shell.renderShell", set())
 
 
+# kiem thu bo qua js bien dich canh ts
+def test_js_emitted_next_to_ts_source_does_not_shadow_it(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo.ts").write_text(
+        "export function helper(a: number) {\n  return a\n}\n", encoding="utf-8"
+    )
+    js_file = src / "foo.js"
+    js_file.write_text("\n\nexport function helper(a) {\n  return a\n}\n", encoding="utf-8")
+    (src / "app.ts").write_text(
+        "import { helper } from './foo.js';\nexport function run() { return helper(1); }\n",
+        encoding="utf-8",
+    )
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+
+    assert g.nodes["src.foo.helper"]["file_path"] == "src/foo.ts"
+    assert not g.has_node("src/foo.js")
+    run_edges = {(v, d["type"]) for _, v, d in g.out_edges("src.app.run", data=True)}
+    assert ("src.foo.helper", EdgeType.CALLS.value) in run_edges
+
+    js_file.unlink()
+    builder.update_file(js_file)  # watcher event for emitted file
+    assert g.has_node("src.foo.helper")
+
+
 def test_symlink_pointing_outside_root_is_skipped(tmp_path: Path):
     outside = tmp_path / "shared"
     outside.mkdir()
@@ -140,3 +167,46 @@ def test_symlink_pointing_outside_root_is_skipped(tmp_path: Path):
     assert not g.has_node("util.py")
     builder.update_file(link)  # watcher path must not raise either
     assert not g.has_node("util.py")
+    assert builder.ensure_folder(outside) == "."
+
+
+# skip duplicate internal workspace symlinks
+def test_internal_symlink_pointing_inside_root_is_skipped(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "real.py").write_text("def real_fn():\n    return 1\n", encoding="utf-8")
+    alias = src / "alias.py"
+    alias.symlink_to(src / "real.py")
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+
+    assert g.has_node("src/real.py")
+    assert g.has_node("src.real.real_fn")
+    assert not g.has_node("src/alias.py")
+    assert not g.has_node("src.alias.real_fn")
+
+    builder.update_file(alias)
+    assert g.has_node("src/real.py")
+    assert g.has_node("src.real.real_fn")
+
+
+# reindex fallback js after ts delete
+def test_deleting_ts_sibling_reindexes_existing_js_fallback(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    ts_file = src / "foo.ts"
+    ts_file.write_text("export function fromTs() { return 1; }\n", encoding="utf-8")
+    (src / "foo.js").write_text("export function fromJs() { return 2; }\n", encoding="utf-8")
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+    assert g.has_node("src.foo.fromTs")
+    assert not g.has_node("src/foo.js")
+
+    ts_file.unlink()
+    builder.update_file(ts_file)
+    assert not g.has_node("src/foo.ts")
+    assert not g.has_node("src.foo.fromTs")
+    assert g.has_node("src/foo.js")
+    assert g.has_node("src.foo.fromJs")

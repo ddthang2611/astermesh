@@ -4,7 +4,16 @@ from typing import Any
 import igraph as ig
 import networkx as nx
 
-from astermesh.graph.model import EDGE_WEIGHTS, LOGIC_NODE_TYPES, CommunityInfo, EdgeType, NodeType
+from astermesh.graph.model import (
+    EDGE_WEIGHTS,
+    EXCLUDED_FILE_TYPES,
+    LOGIC_NODE_TYPES,
+    NON_ENTITY_NODE_TYPES,
+    WIRE_EDGE_TYPES,
+    CommunityInfo,
+    EdgeType,
+    NodeType,
+)
 
 _TYPE_ABBR: dict[str, str] = {
     NodeType.CLASS.value: "c",
@@ -27,19 +36,9 @@ _EDGE_OP_ORDER: tuple[tuple[str, str], ...] = (
     (EdgeType.REFERENCES.value, "&"),
 )
 
-_WIRE_EDGE_TYPES: frozenset[str] = frozenset(etype for etype, _ in _EDGE_OP_ORDER)
-
-_EXCLUDED_FILE_TYPES: frozenset[str] = frozenset({
-    NodeType.FOLDER.value,
-    NodeType.ASSET.value,
-})
-
-_EXCLUDED_ENTITY_TYPES: frozenset[str] = frozenset({
-    NodeType.FOLDER.value,
-    NodeType.FILE.value,
-    NodeType.ASSET.value,
-    NodeType.COMMUNITY.value,
-})
+_WIRE_EDGE_TYPES = WIRE_EDGE_TYPES
+_EXCLUDED_FILE_TYPES = EXCLUDED_FILE_TYPES
+_EXCLUDED_ENTITY_TYPES = NON_ENTITY_NODE_TYPES
 
 _ENCODER_STATE: dict[str, Any] = {"checked": False, "encoder": None}
 
@@ -183,6 +182,7 @@ def _build_compressed_table_lines(
 
     selected: list[tuple[str, str]] = []
     covered: set[str] = set()
+    plen_offset = 1
 
     for prefix in candidates:
         matched = [p for p in all_paths if p not in covered and p.startswith(f"{prefix}/")]
@@ -193,21 +193,21 @@ def _build_compressed_table_lines(
         if freq < 2 or saved_chars <= 0:
             continue
 
-        trial_dirs = [*selected, (did, prefix)]
-        trial_lines = _format_table_lines(trial_dirs, file_items, asset_items)
-        trial_text = "\n".join(trial_lines)
-        trial_chars = len(trial_text)
-        if trial_chars >= best_chars:
-            continue
-        trial_tokens = estimate_tokens(trial_text)
-
-        if trial_tokens <= best_tokens:
-            selected = trial_dirs
+        cut = len(prefix) + plen_offset
+        before_seg = ";".join(f"1:{p}" for p in matched)
+        d_entry = f"@D {did}={prefix}\n" if not selected else f";{did}={prefix}"
+        after_seg = d_entry + ";".join(f"1:{did}/{p[cut:]}" for p in matched)
+        if estimate_tokens(after_seg) <= estimate_tokens(before_seg):
+            selected.append((did, prefix))
             covered.update(matched)
-            best_lines = trial_lines
-            best_chars = trial_chars
-            best_tokens = trial_tokens
 
+    if not selected:
+        return best_lines
+
+    trial_lines = _format_table_lines(selected, file_items, asset_items)
+    trial_text = "\n".join(trial_lines)
+    if len(trial_text) < best_chars and estimate_tokens(trial_text) <= best_tokens:
+        return trial_lines
     return best_lines
 
 
@@ -305,7 +305,11 @@ def _format_sym_record(
         etype = str(edata.get("type", ""))
         if etype not in buckets:
             continue
-        if allowed_targets is not None and target not in allowed_targets and target not in asset_id_map:
+        if (
+            allowed_targets is not None
+            and target not in allowed_targets
+            and target not in asset_id_map
+        ):
             continue
 
         tdata = graph.nodes[target]
@@ -533,8 +537,9 @@ def _collect_l1_active_refs(
 
     for comm, _, _ in kept_by_comm:
         if comm.god_node and graph.has_node(comm.god_node):
-            gf = str(graph.nodes[comm.god_node].get("file_path") or "")
-            if gf and gf != "." and graph.nodes[comm.god_node].get("type") not in _EXCLUDED_FILE_TYPES:
+            gnode = graph.nodes[comm.god_node]
+            gf = str(gnode.get("file_path") or "")
+            if gf and gf != "." and gnode.get("type") not in _EXCLUDED_FILE_TYPES:
                 active_files.add(gf)
 
     for nid in kept_all:
@@ -553,26 +558,25 @@ def _collect_l1_active_refs(
     return active_files, referenced_assets
 
 
-def _render_l1(
+def _prepare_l1_communities(
     graph: nx.MultiDiGraph,
     communities: list[CommunityInfo],
-    root_name: str,
     short_id_map: dict[str, str],
     saliency: dict[str, float],
     bridge_nodes: set[str],
-    k_per_comm: int,
-) -> str:
-    kept_by_comm: list[tuple[CommunityInfo, list[str], int]] = []
-    kept_all: set[str] = set()
-
+) -> tuple[list[tuple[CommunityInfo, list[str], list[str], int]], int]:
+    """Pre-filter and rank community members once before L1 binary search."""
+    prepared: list[tuple[CommunityInfo, list[str], list[str], int]] = []
+    max_remaining = 0
     for comm in communities:
         valid_members = [m for m in comm.members if graph.has_node(m)]
         if not valid_members:
             continue
-        must_keep = {
+        must_keep = [
             m for m in valid_members if m == comm.god_node or m in bridge_nodes
-        }
-        remaining = [m for m in valid_members if m not in must_keep]
+        ]
+        must_set = set(must_keep)
+        remaining = [m for m in valid_members if m not in must_set]
         remaining.sort(
             key=lambda m: (
                 -saliency.get(m, 0.0),
@@ -581,8 +585,24 @@ def _render_l1(
                 m,
             )
         )
-        chosen = list(must_keep) + remaining[:k_per_comm]
-        pruned_count = max(0, len(valid_members) - len(chosen))
+        max_remaining = max(max_remaining, len(remaining))
+        prepared.append((comm, must_keep, remaining, len(valid_members)))
+    return prepared, max_remaining
+
+
+def _render_l1(
+    graph: nx.MultiDiGraph,
+    prepared_comms: list[tuple[CommunityInfo, list[str], list[str], int]],
+    root_name: str,
+    short_id_map: dict[str, str],
+    k_per_comm: int,
+) -> str:
+    kept_by_comm: list[tuple[CommunityInfo, list[str], int]] = []
+    kept_all: set[str] = set()
+
+    for comm, must_keep, remaining, total_valid in prepared_comms:
+        chosen = must_keep + remaining[:k_per_comm]
+        pruned_count = max(0, total_valid - len(chosen))
         kept_by_comm.append((comm, chosen, pruned_count))
         kept_all.update(chosen)
 
@@ -710,7 +730,9 @@ def _render_l2(
         cur_tokens = estimate_tokens("\n".join(base_lines) + "\n")
 
     # pack bridge edges in O(E)
-    by_weight = sorted(bridge_weights.items(), key=lambda kv: (-kv[1], str(kv[0][0]), str(kv[0][1])))
+    by_weight = sorted(
+        bridge_weights.items(), key=lambda kv: (-kv[1], str(kv[0][0]), str(kv[0][1]))
+    )
     kept_edges: list[str] = []
     misses = 0
     for (sc, dc), w in by_weight:
@@ -769,40 +791,19 @@ def render_compact_wire(
                 node_comm[m] = cid
 
     saliency, bridge_nodes = _compute_saliency(graph, communities, node_comm)
-    max_remaining = 0
-    for comm in communities:
-        rem = [
-            m
-            for m in comm.members
-            if graph.has_node(m) and m != comm.god_node and m not in bridge_nodes
-        ]
-        max_remaining = max(max_remaining, len(rem))
+    prepared_comms, max_remaining = _prepare_l1_communities(
+        graph, communities, short_id_map, saliency, bridge_nodes
+    )
 
     # verify k=0 floor before binary search
     best_l1: str | None = None
-    cand0 = _render_l1(
-        graph,
-        communities,
-        root_name,
-        short_id_map,
-        saliency,
-        bridge_nodes,
-        0,
-    )
+    cand0 = _render_l1(graph, prepared_comms, root_name, short_id_map, 0)
     if estimate_tokens(cand0) <= max_tokens:
         best_l1 = cand0
         lo, hi = 1, max_remaining
         while lo <= hi:
             mid = (lo + hi) // 2
-            cand = _render_l1(
-                graph,
-                communities,
-                root_name,
-                short_id_map,
-                saliency,
-                bridge_nodes,
-                mid,
-            )
+            cand = _render_l1(graph, prepared_comms, root_name, short_id_map, mid)
             if estimate_tokens(cand) <= max_tokens:
                 best_l1 = cand
                 lo = mid + 1

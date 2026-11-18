@@ -1,12 +1,28 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
+import pytest
+
+import astermesh
 from astermesh.server import create_mcp_server
 
 
+def _tool_text(res: Any) -> str:
+    return str(res.content[0].text)
+
+
+# kiem thu lazy export tren package goc
+def test_package_version_and_lazy_getattr() -> None:
+    assert astermesh.__version__ == "1.3.3"
+    assert astermesh.create_mcp_server is create_mcp_server
+    with pytest.raises(AttributeError):
+        _ = astermesh.non_existent_symbol
+
+
 # kiem thu toan dien cong cu va tai nguyen mcp server
-def test_server_tools_resources_and_community_wire(tmp_path: Path):
+def test_server_tools_resources_and_community_wire(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'test'\nlicense = 'MIT'\n",
         encoding="utf-8",
@@ -23,7 +39,7 @@ def main():
         encoding="utf-8",
     )
 
-    async def _run():
+    async def _run() -> None:
         server = create_mcp_server(tmp_path, watch=False, context_max_tokens=300)
 
         tools = await server.list_tools()
@@ -42,37 +58,37 @@ def main():
             await server.read_resource("codebase://communities")
         )
 
-        locate_res = await server.call_tool("locate_symbol", {"name": "UserService"})
+        locate_res: Any = await server.call_tool("locate_symbol", {"name": "UserService"})
         assert locate_res is not None and len(locate_res.content) > 0
 
-        outline_res = await server.call_tool("get_file_outline", {"file_path": "service.py"})
+        outline_res: Any = await server.call_tool("get_file_outline", {"file_path": "service.py"})
         assert outline_res is not None and len(outline_res.content) > 0
 
         comm_ok = await server.call_tool("get_community", {"name": "C1"})
-        assert json.loads(comm_ok.content[0].text)["id"] == "C1"
+        assert json.loads(_tool_text(comm_ok))["id"] == "C1"
 
         comm_err = await server.call_tool("get_community", {"name": "Missing"})
-        assert "error" in json.loads(comm_err.content[0].text)
+        assert "error" in json.loads(_tool_text(comm_err))
 
         wire_ok = await server.call_tool("get_community_wire", {"name": "C1", "max_tokens": 200})
-        assert "#ACN2 " in wire_ok.content[0].text
-        assert "@C1 " in wire_ok.content[0].text
+        assert "#ACN2 " in _tool_text(wire_ok)
+        assert "@C1 " in _tool_text(wire_ok)
 
         wire_err = await server.call_tool("get_community_wire", {"name": "Missing"})
-        assert "Error:" in wire_err.content[0].text
+        assert "Error:" in _tool_text(wire_err)
 
         snippet = await server.call_tool(
             "read_file_snippet",
             {"file_path": "pyproject.toml", "start_line": 2, "end_line": 3},
         )
-        payload = json.loads(snippet.content[0].text)
+        payload = json.loads(_tool_text(snippet))
         assert "2: name = 'test'" in payload["content"]
         assert "3: license = 'MIT'" in payload["content"]
 
         bad_snippet = await server.call_tool("read_file_snippet", {"file_path": "../../etc/passwd"})
-        assert "error" in json.loads(bad_snippet.content[0].text)
+        assert "error" in json.loads(_tool_text(bad_snippet))
 
         rebuilt = await server.call_tool("rebuild_graph", {})
-        assert json.loads(rebuilt.content[0].text)["status"] == "rebuilt"
+        assert json.loads(_tool_text(rebuilt))["status"] == "rebuilt"
 
     asyncio.run(_run())

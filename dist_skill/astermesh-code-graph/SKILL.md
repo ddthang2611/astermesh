@@ -12,7 +12,7 @@ compatibility: >-
   configured as an MCP server over stdio or streamable-http.
 metadata:
   author: ddthang2611
-  version: "1.3.0"
+  version: "1.3.3"
   repository: "https://github.com/ddthang2611/astermesh"
 ---
 
