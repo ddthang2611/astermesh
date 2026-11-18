@@ -2,6 +2,7 @@ from pathlib import Path
 
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.model import EdgeType, NodeType
+from astermesh.parser.engine import ASTEngine
 
 
 def test_ts_arrow_functions_calls_and_imports(tmp_path: Path):
@@ -315,3 +316,26 @@ export class AppModule {}
 
     card_edges = [(v, d["type"]) for _, v, d in g.out_edges("CardComponent.CardComponent", data=True)]
     assert ("ConfigService.ConfigService", EdgeType.INJECTS.value) in card_edges
+
+
+def test_vue_nested_template_keeps_all_rendered_components(tmp_path: Path):
+    (tmp_path / "App.vue").write_text(
+        """<template>
+  <div>
+    <template v-if="ok"><HeaderBar /></template>
+    <UserList />
+    <template #footer><FooterBar /></template>
+  </div>
+</template>
+<script setup lang="ts">
+const tpl = "</template><NotAComponent />";
+</script>
+""",
+        encoding="utf-8",
+    )
+
+    parsed = ASTEngine().parse_file(tmp_path / "App.vue", tmp_path)
+
+    assert parsed is not None
+    comp = next(e for e in parsed.entities if e.kind == NodeType.COMPONENT.value)
+    assert comp.renders == ["HeaderBar", "UserList", "FooterBar"]
