@@ -10,8 +10,11 @@ from astermesh.parser.types import FileParseResult, RawEntity
 _SCRIPT_BLOCK_RE = re.compile(
     r"<script([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL
 )
-# greedy: nested <template v-if> / <template #slot> blocks must stay inside the match.
-# Script blocks are stripped first so a "</template>" string in code can't extend it.
+_STYLE_BLOCK_RE = re.compile(
+    r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL
+)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# greedy match keeps nested template blocks
 _TEMPLATE_BLOCK_RE = re.compile(
     r"<template[^>]*>(.*)</template>", re.IGNORECASE | re.DOTALL
 )
@@ -58,6 +61,12 @@ def extract_template_tags(markup: str) -> list[str]:
     return tags
 
 
+def _strip_non_template_blocks(text: str) -> str:
+    cleaned = _SCRIPT_BLOCK_RE.sub("", text)
+    cleaned = _STYLE_BLOCK_RE.sub("", cleaned)
+    return _HTML_COMMENT_RE.sub("", cleaned)
+
+
 def parse_sfc(
     source_bytes: bytes,
     rel_path: str,
@@ -75,12 +84,12 @@ def parse_sfc(
     )
 
     template_tags: list[str] = []
+    cleaned = _strip_non_template_blocks(text)
     if ext == ".vue":
-        tpl_match = _TEMPLATE_BLOCK_RE.search(_SCRIPT_BLOCK_RE.sub("", text))
+        tpl_match = _TEMPLATE_BLOCK_RE.search(cleaned)
         if tpl_match:
             template_tags = extract_template_tags(tpl_match.group(1))
     else:
-        cleaned = _SCRIPT_BLOCK_RE.sub("", text)
         template_tags = extract_template_tags(cleaned)
 
     has_script_entities = False

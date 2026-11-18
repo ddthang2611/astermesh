@@ -570,7 +570,12 @@ def test_l2_hard_cap_many_communities_and_single_community_l1_budget() -> None:
         god = f"m{i}.Hub{i}"
         leaf = f"m{i}.leaf{i}"
         g_many.add_node(
-            god, name=f"Hub{i}", type=NodeType.CLASS.value, file_path=fpath, line_start=1, line_end=10
+            god,
+            name=f"Hub{i}",
+            type=NodeType.CLASS.value,
+            file_path=fpath,
+            line_start=1,
+            line_end=10,
         )
         g_many.add_node(
             leaf,

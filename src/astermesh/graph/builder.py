@@ -31,6 +31,12 @@ __all__ = [
 
 _JS_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs"})
 _TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
+_JS_FALLBACK_SUFFIXES: dict[str, tuple[str, ...]] = {
+    ".ts": (".js", ".jsx", ".mjs", ".cjs"),
+    ".tsx": (".jsx", ".js", ".mjs", ".cjs"),
+    ".mts": (".mjs", ".js", ".jsx", ".cjs"),
+    ".cts": (".cjs", ".js", ".jsx", ".mjs"),
+}
 
 
 def _has_ts_sibling(fpath: Path) -> bool:
@@ -112,10 +118,13 @@ class GraphBuilder:
     def _is_indexable(self, fpath: Path) -> bool:
         if is_ignored_file(fpath.name):
             return False
-        # symlinks resolving outside the root cannot be mapped to a project path
+        # reject external and internal duplicate symlinks
         try:
-            rel = fpath.resolve().relative_to(self.root_path).as_posix()
-        except ValueError:
+            resolved = fpath.resolve()
+            rel = resolved.relative_to(self.root_path).as_posix()
+            if fpath.is_symlink() and resolved != fpath.parent.resolve() / fpath.name:
+                return False
+        except (OSError, ValueError):
             return False
         if self.parser.supports(fpath.suffix.lower()):
             return not _has_ts_sibling(fpath)
@@ -183,20 +192,34 @@ class GraphBuilder:
         self._add_edge(parent_dir, rel_asset, EdgeType.CONTAINS)
         return rel_asset
 
+    def _index_and_link(self, fpath: Path) -> None:
+        parent_dir = self.ensure_folder(fpath.parent)
+        indexed = self._index_single_file(fpath, parent_dir)
+        self.resolver.set_known_files(set(self._index.parsed_files.keys()))
+        if indexed and indexed in self._index.parsed_files:
+            self._linker.link_file(self._index.parsed_files[indexed])
+
     # incremental update for file modification or deletion
     def update_file(self, fpath: Path) -> None:
         with self.lock:
             try:
-                rel_file = fpath.resolve().relative_to(self.root_path).as_posix()
-            except ValueError:
+                resolved = fpath.resolve()
+                rel_file = resolved.relative_to(self.root_path).as_posix()
+            except (OSError, ValueError):
+                return
+            if fpath.is_symlink() and resolved != fpath.parent.resolve() / fpath.name:
                 return
             self.remove_path(rel_file)
             if fpath.exists() and fpath.is_file() and self._is_indexable(fpath):
-                parent_dir = self.ensure_folder(fpath.parent)
-                indexed = self._index_single_file(fpath, parent_dir)
-                self.resolver.set_known_files(set(self._index.parsed_files.keys()))
-                if indexed and indexed in self._index.parsed_files:
-                    self._linker.link_file(self._index.parsed_files[indexed])
+                self._index_and_link(fpath)
+                return
+            self.resolver.set_known_files(set(self._index.parsed_files.keys()))
+            if not fpath.exists():
+                for js_ext in _JS_FALLBACK_SUFFIXES.get(fpath.suffix.lower(), ()):
+                    cand = fpath.with_suffix(js_ext)
+                    if cand.exists() and cand.is_file() and self._is_indexable(cand):
+                        self._index_and_link(cand)
+                        break
 
     def remove_path(self, rel_path: str) -> None:
         with self.lock:
@@ -209,20 +232,22 @@ class GraphBuilder:
                 self.graph.remove_node(rel_path)
 
     def ensure_folder(self, dir_path: Path) -> str:
-        rel_dir = dir_path.resolve().relative_to(self.root_path).as_posix()
-        if rel_dir == ".":
-            return "."
-        parts = rel_dir.split("/")
-        curr = "."
-        for part in parts:
-            nxt = part if curr == "." else f"{curr}/{part}"
-            if not self.graph.has_node(nxt):
-                fnode = EntityNode(
-                    id=nxt, name=part, node_type=NodeType.FOLDER, file_path=nxt
-                )
-                self.graph.add_node(nxt, **fnode.to_dict())
-                self._add_edge(curr, nxt, EdgeType.CONTAINS)
-            curr = nxt
-        return rel_dir
-
-    _ensure_folder_hierarchy = ensure_folder
+        with self.lock:
+            try:
+                rel_dir = dir_path.resolve().relative_to(self.root_path).as_posix()
+            except (OSError, ValueError):
+                return "."
+            if rel_dir == ".":
+                return "."
+            parts = rel_dir.split("/")
+            curr = "."
+            for part in parts:
+                nxt = part if curr == "." else f"{curr}/{part}"
+                if not self.graph.has_node(nxt):
+                    fnode = EntityNode(
+                        id=nxt, name=part, node_type=NodeType.FOLDER, file_path=nxt
+                    )
+                    self.graph.add_node(nxt, **fnode.to_dict())
+                    self._add_edge(curr, nxt, EdgeType.CONTAINS)
+                curr = nxt
+            return rel_dir

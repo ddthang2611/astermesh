@@ -4,22 +4,10 @@ from typing import Any
 
 import networkx as nx
 
-from astermesh.graph.model import EdgeType, NodeType
+from astermesh.graph.model import CONTAINER_NODE_TYPES, SEMANTIC_IMPACT_EDGES
 
-_CONTAINER_TYPES: frozenset[str] = frozenset({
-    NodeType.FILE.value,
-    NodeType.FOLDER.value,
-})
-
-_SEMANTIC_IMPACT_EDGES: frozenset[str] = frozenset({
-    EdgeType.CALLS.value,
-    EdgeType.INHERITS.value,
-    EdgeType.RENDERS.value,
-    EdgeType.INJECTS.value,
-    EdgeType.REFERENCES.value,
-    EdgeType.PROVIDES.value,
-    EdgeType.IMPORTS.value,
-})
+_CONTAINER_TYPES = CONTAINER_NODE_TYPES
+_SEMANTIC_IMPACT_EDGES = SEMANTIC_IMPACT_EDGES
 
 
 # centralized graph query engine

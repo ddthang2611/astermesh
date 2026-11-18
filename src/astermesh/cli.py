@@ -212,7 +212,9 @@ def query(
 # token benchmark command
 @app.command()
 def benchmark(
-    path: Annotated[Path, typer.Argument(help="Target repository directory to benchmark")] = Path("."),
+    path: Annotated[
+        Path, typer.Argument(help="Target repository directory to benchmark")
+    ] = Path("."),
     report: Annotated[
         Path | None,
         typer.Option("-r", "--report", help="Optional markdown report output path"),

@@ -201,3 +201,39 @@ def test_resolver_lexical_reject_cached_dir_and_symlink_escape(
     resolver.set_known_files(set())
     assert resolver._dir_entries == {}
     assert len(resolver._cache) == 0
+
+
+# map NodeNext JS imports to TS
+def test_resolver_nodenext_js_specifier_maps_to_ts_source(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/main.ts").write_text("", encoding="utf-8")
+    (tmp_path / "src/foo.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "src/foo.js").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "src/Bar.tsx").write_text("export const Bar = () => null;\n", encoding="utf-8")
+    (tmp_path / "src/mod.mts").write_text("export const m = 1;\n", encoding="utf-8")
+    (tmp_path / "src/cfg.cts").write_text("export const c = 1;\n", encoding="utf-8")
+    (tmp_path / "src/real.js").write_text("export const r = 1;\n", encoding="utf-8")
+
+    resolver = ModuleResolver(tmp_path)
+    resolver.set_known_files({
+        "src/main.ts",
+        "src/foo.ts",
+        "src/Bar.tsx",
+        "src/mod.mts",
+        "src/cfg.cts",
+        "src/real.js",
+    })
+
+    # prefer indexed TS over emitted JS
+    assert resolver.resolve("src/main.ts", "./foo.js")[0] == "src/foo.ts"
+    assert resolver.resolve("src/main.ts", "./Bar.jsx")[0] == "src/Bar.tsx"
+    assert resolver.resolve("src/main.ts", "./mod.mjs")[0] == "src/mod.mts"
+    assert resolver.resolve("src/main.ts", "./cfg.cjs")[0] == "src/cfg.cts"
+    assert resolver.resolve("src/main.ts", "./real.js")[0] == "src/real.js"
+    assert resolver.resolve("src/main.ts", "./missing.js")[0] is None
+
+    # disk fallback when known_files is empty
+    disk_resolver = ModuleResolver(tmp_path)
+    assert disk_resolver.resolve("src/main.ts", "./Bar.jsx")[0] == "src/Bar.tsx"
+    assert disk_resolver.resolve("src/main.ts", "./mod.mjs")[0] == "src/mod.mts"
+    assert disk_resolver.resolve("src/main.ts", "./cfg.cjs")[0] == "src/cfg.cts"

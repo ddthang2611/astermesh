@@ -1,6 +1,11 @@
 from astermesh.graph.model import (
+    CONTAINER_NODE_TYPES,
     EDGE_WEIGHTS,
+    EXCLUDED_FILE_TYPES,
     LOGIC_NODE_TYPES,
+    NON_ENTITY_NODE_TYPES,
+    SEMANTIC_IMPACT_EDGES,
+    WIRE_EDGE_TYPES,
     CommunityInfo,
     EdgeType,
     EntityNode,
@@ -8,8 +13,8 @@ from astermesh.graph.model import (
 )
 
 
-def test_entity_node_serialization():
-    # arrange
+# kiem thu tuan tu hoa thuc the
+def test_entity_node_serialization() -> None:
     node = EntityNode(
         id="pkg.mod.MyClass",
         name="MyClass",
@@ -20,41 +25,38 @@ def test_entity_node_serialization():
         parameters=["x", "y"],
         is_async=False,
         is_method=False,
-        community_id=1,
+        community_id="C1",
     )
 
-    # act
     data = node.to_dict()
 
-    # assert
     assert data["name"] == "MyClass"
     assert data["type"] == NodeType.CLASS.value
     assert data["file_path"] == "pkg/mod.py"
     assert data["line_start"] == 10
     assert data["line_end"] == 50
     assert data["parameters"] == ["x", "y"]
-    assert data["community_id"] == 1
+    assert data["community_id"] == "C1"
 
 
-def test_community_info_creation():
-    # arrange & act
+# kiem thu khoi tao thong tin cum
+def test_community_info_creation() -> None:
     info = CommunityInfo(
-        id=0,
+        id="C0",
         name="engine_cluster",
         size=3,
         god_node="core.engine",
         members=["core.engine", "core.worker", "core.task"],
     )
 
-    # assert
-    assert info.id == 0
+    assert info.id == "C0"
     assert info.name == "engine_cluster"
     assert info.god_node == "core.engine"
     assert len(info.members) == 3
 
 
-def test_edge_types():
-    # assert
+# kiem thu cac loai canh co ban
+def test_edge_types() -> None:
     assert EdgeType.CONTAINS.value == "CONTAINS"
     assert EdgeType.DEFINES.value == "DEFINES"
     assert EdgeType.IMPORTS.value == "IMPORTS"
@@ -63,8 +65,8 @@ def test_edge_types():
     assert EdgeType.REFERENCES.value == "REFERENCES"
 
 
-# kiem thu schema fe va trong so canh
-def test_fe_node_edge_weights_and_logic_types():
+# kiem thu schema fe, trong so va tap hang so
+def test_fe_node_edge_weights_and_constant_sets() -> None:
     assert NodeType.COMPONENT.value == "component"
     assert NodeType.HOOK.value == "hook"
     assert NodeType.SERVICE.value == "service"
@@ -90,6 +92,13 @@ def test_fe_node_edge_weights_and_logic_types():
     assert NodeType.FOLDER.value not in LOGIC_NODE_TYPES
     assert NodeType.FILE.value not in LOGIC_NODE_TYPES
     assert NodeType.CONFIG.value not in LOGIC_NODE_TYPES
+
+    assert CONTAINER_NODE_TYPES == {NodeType.FILE.value, NodeType.FOLDER.value}
+    assert EXCLUDED_FILE_TYPES == {NodeType.FOLDER.value, NodeType.ASSET.value}
+    assert NodeType.COMMUNITY.value in NON_ENTITY_NODE_TYPES
+    assert WIRE_EDGE_TYPES.issubset(SEMANTIC_IMPACT_EDGES)
+    assert EdgeType.IMPORTS.value in SEMANTIC_IMPACT_EDGES
+    assert EdgeType.CONTAINS.value not in SEMANTIC_IMPACT_EDGES
 
     exported = EntityNode(
         id="src.App.App",

@@ -35,9 +35,9 @@ class GraphEventHandler(FileSystemEventHandler):
     def _is_supported_file(self, fpath: Path) -> bool:
         if is_ignored_file(fpath.name):
             return False
-        return self.builder.parser.supports(fpath.suffix.lower()) or self.builder.satellite.supports(
-            fpath
-        )
+        return self.builder.parser.supports(
+            fpath.suffix.lower()
+        ) or self.builder.satellite.supports(fpath)
 
     # reload resolver config under builder lock
     def _maybe_reload_config(self, *paths: Path) -> bool:

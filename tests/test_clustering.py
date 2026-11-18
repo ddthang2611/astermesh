@@ -76,7 +76,9 @@ def test_weighted_god_node_self_loop_exclusion_and_cpm_mode():
     assert comms[0].name == "HubService"
 
     # resolution cao hon tach thanh cum nho hon
-    comms_fine = CommunityClusterer(seed=0, partition_mode="cpm", resolution_parameter=0.1).cluster(g)
+    comms_fine = CommunityClusterer(
+        seed=0, partition_mode="cpm", resolution_parameter=0.1
+    ).cluster(g)
     assert len(comms_fine) > len(comms)
     hub_comm = next(c for c in comms_fine if "hub" in c.members)
     assert hub_comm.god_node == "hub"

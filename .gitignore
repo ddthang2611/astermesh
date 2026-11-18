@@ -208,9 +208,11 @@ xml-graph/
 astermesh-graph/
 output/
 dist/
+dist_skill/
 *.acn
 *.xml
 *.html
+*.zip
 
 #test prj
 test-prj

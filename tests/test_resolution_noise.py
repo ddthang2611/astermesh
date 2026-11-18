@@ -132,7 +132,11 @@ def test_legit_edges_still_resolve(tmp_path: Path):
             "export function fetchUser(id: string) { return fetch(BASE + id); }\n"
         ),
         "src/Avatar.tsx": "function Avatar() { return <img />; }\nexport default Avatar;\n",
-        "src/utils.ts": "const clamp = (n: number) => n;\nconst pad = (s: string) => s;\nexport { clamp, pad as padStr };\n",
+        "src/utils.ts": (
+            "const clamp = (n: number) => n;\n"
+            "const pad = (s: string) => s;\n"
+            "export { clamp, pad as padStr };\n"
+        ),
         "src/Profile.tsx": (
             "import Avatar from './Avatar';\n"
             "import { fetchUser, BASE } from './api';\n"

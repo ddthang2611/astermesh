@@ -19,6 +19,13 @@ SOURCE_PROBE_EXTS: tuple[str, ...] = (
     ".d.ts",
 )
 
+_JS_TO_TS_EXTS: dict[str, tuple[str, ...]] = {
+    ".js": (".ts", ".tsx"),
+    ".jsx": (".tsx", ".ts"),
+    ".mjs": (".mts",),
+    ".cjs": (".cts",),
+}
+
 ASSET_EXTENSIONS: frozenset[str] = frozenset({
     ".svg",
     ".png",
@@ -254,13 +261,35 @@ class ModuleResolver:
         except OSError:
             return False
 
+    def _resolve_js_to_ts(self, norm: str, check_disk: bool) -> str | None:
+        stem, ext = posixpath.splitext(norm)
+        ts_exts = _JS_TO_TS_EXTS.get(ext.lower())
+        if not ts_exts:
+            return None
+        for ts_ext in ts_exts:
+            probe = f"{stem}{ts_ext}"
+            if probe in self._known_files or (check_disk and self._file_exists(probe)):
+                return probe
+        return None
+
     def _probe_candidate(self, cand: str) -> str | None:
         norm = self._normalize_within(cand)
         if not norm:
             return None
 
-        if norm != "." and self._file_exists(norm):
-            return norm
+        if norm != ".":
+            if norm in self._known_files:
+                return norm
+            # map NodeNext JS imports to TS
+            ts_cand = self._resolve_js_to_ts(norm, check_disk=False)
+            if ts_cand is not None:
+                return ts_cand
+            if self._file_exists(norm):
+                return norm
+            if not self._known_files:
+                ts_cand = self._resolve_js_to_ts(norm, check_disk=True)
+                if ts_cand is not None:
+                    return ts_cand
 
         if norm != ".":
             for ext in SOURCE_PROBE_EXTS:
