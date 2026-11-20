@@ -71,6 +71,14 @@ def build(
         bool,
         typer.Option("--include-xml-legacy", help="Also emit deprecated XML context_graph.xml"),
     ] = False,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("--exclude", help="Glob path pattern to exclude (repeatable)"),
+    ] = None,
+    respect_gitignore: Annotated[
+        bool,
+        typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
+    ] = False,
 ) -> None:
     resolved_path = path.resolve()
     ext = out_dir.suffix.lower()
@@ -93,7 +101,9 @@ def build(
     html_path = html if html else (target_dir / "astermesh_view.html")
     report_path = target_dir / "GRAPH_REPORT.md"
 
-    builder = GraphBuilder(path)
+    builder = GraphBuilder(
+        path, exclude_patterns=exclude, respect_gitignore=respect_gitignore
+    )
     graph = builder.build_full()
     clusterer = CommunityClusterer(partition_mode=leiden_mode.value)
     communities = clusterer.cluster(graph)
@@ -144,9 +154,21 @@ def serve(
             help="Optional token budget applied to codebase://context",
         ),
     ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("--exclude", help="Glob path pattern to exclude (repeatable)"),
+    ] = None,
+    respect_gitignore: Annotated[
+        bool,
+        typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
+    ] = False,
 ) -> None:
     mcp = create_mcp_server(
-        path, watch=not no_watch, context_max_tokens=context_max_tokens
+        path,
+        watch=not no_watch,
+        context_max_tokens=context_max_tokens,
+        exclude_patterns=exclude,
+        respect_gitignore=respect_gitignore,
     )
     if transport == TransportType.sse:
         mcp.run(transport="sse", host=host, port=port)
@@ -169,8 +191,18 @@ def query(
     list_communities: Annotated[
         bool, typer.Option("--list-communities", help="List detected functional communities")
     ] = False,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("--exclude", help="Glob path pattern to exclude (repeatable)"),
+    ] = None,
+    respect_gitignore: Annotated[
+        bool,
+        typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
+    ] = False,
 ) -> None:
-    builder = GraphBuilder(path)
+    builder = GraphBuilder(
+        path, exclude_patterns=exclude, respect_gitignore=respect_gitignore
+    )
     graph = builder.build_full()
 
     if overview or list_communities:
@@ -187,9 +219,13 @@ def query(
             return
 
         if list_communities:
+            functional = [c for c in communities if c.size >= 2]
+            singleton_count = sum(1 for c in communities if c.size <= 1)
             typer.echo(f"Discovered Communities for: {path.resolve().name}")
-            for c in communities:
+            for c in functional:
                 typer.echo(f"- [{c.id}] {c.name} (God Node: {c.god_node}, Size: {c.size})")
+            if singleton_count > 0:
+                typer.echo(f"- Isolated Singletons (size=1): {singleton_count} entities")
             return
 
     if not symbol:
@@ -230,11 +266,21 @@ def benchmark(
             help="Include deprecated XML serializer comparison metrics",
         ),
     ] = False,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option("--exclude", help="Glob path pattern to exclude (repeatable)"),
+    ] = None,
+    respect_gitignore: Annotated[
+        bool,
+        typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
+    ] = False,
 ) -> None:
     from astermesh.benchmark.runner import TokenBenchmarkRunner
 
     typer.echo(f"Running token benchmark on: {path.resolve()} ...")
-    runner = TokenBenchmarkRunner(path)
+    runner = TokenBenchmarkRunner(
+        path, exclude_patterns=exclude, respect_gitignore=respect_gitignore
+    )
     metrics = runner.run(max_tokens=max_tokens, include_xml_legacy=include_xml_legacy)
 
     report_md = runner.format_markdown_report(metrics)

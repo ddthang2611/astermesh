@@ -7,7 +7,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from astermesh.graph.builder import GraphBuilder
-from astermesh.graph.filters import is_ignored_dir, is_ignored_file
+from astermesh.graph.filters import is_ignored_dir, is_ignored_file, is_saved_webpage_dir
 
 _HANDLED_EVENT_TYPES: frozenset[str] = frozenset({
     "created",
@@ -47,12 +47,35 @@ class GraphEventHandler(FileSystemEventHandler):
             return True
         return False
 
+    def _is_in_saved_webpage_dir(self, rel: str, is_dir: bool) -> bool:
+        parts = rel.split("/")
+        limit = len(parts) if is_dir else len(parts) - 1
+        for idx in range(limit):
+            seg = parts[idx]
+            if not seg.lower().endswith("_files"):
+                continue
+            parent_dir = self.builder.root_path.joinpath(*parts[:idx])
+            try:
+                siblings = set(os.listdir(parent_dir))
+            except OSError:
+                continue
+            if is_saved_webpage_dir(seg, siblings):
+                return True
+        return False
+
     def _relative_to_root(self, path: Path) -> str | None:
         try:
             rel = path.resolve().relative_to(self.builder.root_path).as_posix()
-        except ValueError:
+        except (OSError, ValueError):
             return None
-        return None if is_ignored_dir(rel) else rel
+        if is_ignored_dir(rel):
+            return None
+        is_dir = path.is_dir()
+        if self.builder.is_excluded(rel, is_dir=is_dir):
+            return None
+        if self._is_in_saved_webpage_dir(rel, is_dir=is_dir):
+            return None
+        return rel
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if event.event_type not in _HANDLED_EVENT_TYPES:

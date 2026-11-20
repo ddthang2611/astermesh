@@ -15,7 +15,7 @@ def _tool_text(res: Any) -> str:
 
 # kiem thu lazy export tren package goc
 def test_package_version_and_lazy_getattr() -> None:
-    assert astermesh.__version__ == "1.3.3"
+    assert astermesh.__version__ == "1.3.4"
     assert astermesh.create_mcp_server is create_mcp_server
     with pytest.raises(AttributeError):
         _ = astermesh.non_existent_symbol
@@ -90,5 +90,30 @@ def main():
 
         rebuilt = await server.call_tool("rebuild_graph", {})
         assert json.loads(_tool_text(rebuilt))["status"] == "rebuilt"
+
+    asyncio.run(_run())
+
+
+# summarize singletons and server exclusions
+def test_server_communities_summarizes_singletons_and_excludes(tmp_path: Path) -> None:
+    (tmp_path / "resources").mkdir()
+    (tmp_path / "resources/ignored.py").write_text("def noise_fn(): pass\n", encoding="utf-8")
+    (tmp_path / "mod.py").write_text(
+        "def iso_a(): return 1\n"
+        "def iso_b(): return 2\n"
+        "def caller(): return callee()\n"
+        "def callee(): return 3\n",
+        encoding="utf-8",
+    )
+
+    async def _run() -> None:
+        server = create_mcp_server(tmp_path, watch=False, exclude_patterns=["resources/**"])
+        comms_text = str(await server.read_resource("codebase://communities"))
+        assert "Isolated Singletons (size=1):" in comms_text
+        assert "iso_a" not in comms_text
+        assert "iso_b" not in comms_text
+
+        locate_noise: Any = await server.call_tool("locate_symbol", {"name": "noise_fn"})
+        assert "noise_fn" not in _tool_text(locate_noise)
 
     asyncio.run(_run())

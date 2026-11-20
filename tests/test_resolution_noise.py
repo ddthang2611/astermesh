@@ -262,3 +262,39 @@ def test_barrel_reexports_and_cycle_guard(tmp_path: Path):
     assert ("src/cycle_a.ts", EdgeType.IMPORTS.value) in {
         (v, d["type"]) for _, v, d in g.out_edges("src/app.ts", data=True)
     }
+
+
+# block bogus dotted receiver calls
+def test_unresolved_dotted_member_call_does_not_leak_globally(tmp_path: Path):
+    _write(tmp_path, {
+        "src/validator.ts": (
+            "export class TargetValidator {\n"
+            "  validate(v: string) { return v.length > 0; }\n"
+            "  check() { return this.validate('ok'); }\n"
+            "}\n"
+        ),
+        "src/noise.js": (
+            "export function handle(unknownObj, holder) {\n"
+            "  unknownObj.validate('x');\n"
+            "  this.holder.validate('y');\n"
+            "  this.validate('z');\n"
+            "  return 1;\n"
+            "}\n"
+        ),
+        "src/direct.ts": (
+            "import { TargetValidator } from './validator';\n"
+            "export function verify() {\n"
+            "  return TargetValidator.validate('a');\n"
+            "}\n"
+        ),
+    })
+
+    g = GraphBuilder(tmp_path).build_full()
+
+    assert _out(g, "src.noise.handle") == set()
+    assert ("src.validator.TargetValidator.validate", EdgeType.CALLS.value) in _out(
+        g, "src.validator.TargetValidator.check"
+    )
+    assert ("src.validator.TargetValidator.validate", EdgeType.CALLS.value) in _out(
+        g, "src.direct.verify"
+    )

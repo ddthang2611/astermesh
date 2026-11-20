@@ -1,5 +1,6 @@
 import os
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 import networkx as nx
@@ -10,7 +11,11 @@ from astermesh.graph.filters import (
     TEST_DATA_DIRS,
     is_ignored_dir,
     is_ignored_file,
+    is_minified_js,
+    is_saved_webpage_dir,
     is_test_path,
+    load_gitignore_patterns,
+    matches_exclude_patterns,
 )
 from astermesh.graph.linker import RelationLinker
 from astermesh.graph.model import EdgeType, EntityNode, NodeType
@@ -51,8 +56,18 @@ def _has_ts_sibling(fpath: Path) -> bool:
 
 # in-memory graph management and incremental updater
 class GraphBuilder:
-    def __init__(self, root_path: Path) -> None:
+    def __init__(
+        self,
+        root_path: Path,
+        exclude_patterns: Sequence[str] | None = None,
+        respect_gitignore: bool = False,
+    ) -> None:
         self.root_path = root_path.resolve()
+        patterns: list[str] = list(exclude_patterns) if exclude_patterns else []
+        if respect_gitignore:
+            patterns.extend(load_gitignore_patterns(self.root_path))
+        self.exclude_patterns: tuple[str, ...] = tuple(patterns)
+        self.respect_gitignore = respect_gitignore
         self.graph = nx.MultiDiGraph()
         self.parser = ASTEngine()
         self.satellite = SatelliteParser()
@@ -62,6 +77,11 @@ class GraphBuilder:
         self._linker = RelationLinker(
             self.graph, self._index, self.resolver, self._ensure_asset_node
         )
+
+    def is_excluded(self, rel_posix: str, is_dir: bool = False) -> bool:
+        if not self.exclude_patterns:
+            return False
+        return matches_exclude_patterns(rel_posix, self.exclude_patterns, is_dir=is_dir)
 
     @property
     def _suffix_table(self) -> dict[str, set[str]]:
@@ -95,9 +115,18 @@ class GraphBuilder:
         self.graph.add_node(".", **root_node.to_dict())
 
         for dirpath, dirnames, filenames in os.walk(self.root_path):
-            dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
             curr_dir = Path(dirpath)
             rel_dir = curr_dir.relative_to(self.root_path).as_posix()
+            sibling_lower = {f.lower() for f in filenames}
+            kept_dirs: list[str] = []
+            for d in dirnames:
+                if is_ignored_dir(d) or is_saved_webpage_dir(d, sibling_lower):
+                    continue
+                rel_sub = d if rel_dir == "." else f"{rel_dir}/{d}"
+                if self.is_excluded(rel_sub, is_dir=True):
+                    continue
+                kept_dirs.append(d)
+            dirnames[:] = kept_dirs
 
             if rel_dir != ".":
                 parent_dir = curr_dir.parent.relative_to(self.root_path).as_posix()
@@ -126,8 +155,10 @@ class GraphBuilder:
                 return False
         except (OSError, ValueError):
             return False
+        if self.is_excluded(rel, is_dir=False):
+            return False
         if self.parser.supports(fpath.suffix.lower()):
-            return not _has_ts_sibling(fpath)
+            return not _has_ts_sibling(fpath) and not is_minified_js(fpath)
         if not self.satellite.supports(fpath):
             return False
         # json/yaml fixtures under test folders flood the graph with config nodes

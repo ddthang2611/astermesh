@@ -98,3 +98,46 @@ def test_cli_benchmark(tmp_path: Path):
     )
     assert res_xml.exit_code == 0
     assert "smaller than XML" in res_xml.stdout
+
+
+# test cli --exclude and --respect-gitignore flags
+def test_cli_exclude_and_respect_gitignore(tmp_path: Path):
+    (tmp_path / ".gitignore").write_text("gitignored/\n", encoding="utf-8")
+    (tmp_path / "gitignored").mkdir()
+    (tmp_path / "gitignored/a.py").write_text("def skip_git(): pass\n", encoding="utf-8")
+    (tmp_path / "resources").mkdir()
+    (tmp_path / "resources/b.py").write_text("def skip_res(): pass\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/keep.py").write_text("def keep_fn(): return 1\n", encoding="utf-8")
+
+    res_build = runner.invoke(
+        app,
+        [
+            "build",
+            str(tmp_path),
+            "--no-html",
+            "--exclude",
+            "resources/**",
+            "--respect-gitignore",
+        ],
+    )
+    assert res_build.exit_code == 0
+    acn = (tmp_path / "astermesh-graph" / "context_graph.acn").read_text(encoding="utf-8")
+    assert "keep_fn" in acn
+    assert "skip_res" not in acn
+    assert "skip_git" not in acn
+
+    res_query = runner.invoke(
+        app,
+        [
+            "query",
+            "skip_res",
+            "-p",
+            str(tmp_path),
+            "--exclude",
+            "resources/**",
+            "--respect-gitignore",
+        ],
+    )
+    assert res_query.exit_code == 0
+    assert "not found" in res_query.stdout

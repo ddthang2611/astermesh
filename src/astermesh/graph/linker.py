@@ -43,15 +43,43 @@ class RelationLinker:
         local_aliases, asset_aliases = self._link_imports(parsed)
         consumed_assets: set[str] = set()
 
+        class_types = {
+            NodeType.CLASS.value,
+            NodeType.SERVICE.value,
+            NodeType.COMPONENT.value,
+        }
         class_injects: dict[str, list[str]] = {
             ent.fqn: ent.injects for ent in parsed.entities if ent.injects
         }
+        class_owners: dict[str, list[str]] = {
+            ent.fqn: [ent.fqn, *ent.bases]
+            for ent in parsed.entities
+            if ent.kind in class_types
+        }
 
         for ent in parsed.entities:
-            extra_classes = class_injects.get(ent.parent_fqn or "", [])
+            extra_classes = self._lookup_enclosing(ent.parent_fqn, class_injects)
+            owner_classes = self._lookup_enclosing(ent.parent_fqn, class_owners)
             self._link_entity_relations(
-                ent, parsed, local_aliases, asset_aliases, extra_classes, consumed_assets
+                ent,
+                parsed,
+                local_aliases,
+                asset_aliases,
+                extra_classes,
+                consumed_assets,
+                owner_classes=owner_classes,
             )
+
+    @staticmethod
+    def _lookup_enclosing(fqn: str | None, table: dict[str, list[str]]) -> list[str]:
+        curr = fqn or ""
+        while curr:
+            if curr in table:
+                return table[curr]
+            if "." not in curr:
+                break
+            curr = curr.rsplit(".", 1)[0]
+        return []
 
         # fallback file-level edge for unused asset imports
         for alias_name, (asset_id, _) in asset_aliases.items():
@@ -101,6 +129,7 @@ class RelationLinker:
         asset_aliases: dict[str, tuple[str, str | None]],
         extra_classes: list[str],
         consumed_assets: set[str],
+        owner_classes: list[str] | None = None,
     ) -> None:
         for rendered in ent.renders:
             if self._try_link_asset(
@@ -108,7 +137,11 @@ class RelationLinker:
             ):
                 continue
             target = self.resolve_symbol(
-                rendered, parsed, local_aliases, shadowed=ent.local_names
+                rendered,
+                parsed,
+                local_aliases,
+                shadowed=ent.local_names,
+                owner_classes=owner_classes,
             )
             self._add_entity_edge(ent.fqn, target, EdgeType.RENDERS)
 
@@ -132,6 +165,7 @@ class RelationLinker:
                 local_aliases,
                 hint_classes=extra_classes,
                 shadowed=ent.local_names,
+                owner_classes=owner_classes,
             )
             self._add_entity_edge(ent.fqn, target, EdgeType.CALLS)
 
@@ -146,7 +180,11 @@ class RelationLinker:
             ):
                 continue
             target = self.resolve_symbol(
-                ref, parsed, local_aliases, shadowed=ent.local_names
+                ref,
+                parsed,
+                local_aliases,
+                shadowed=ent.local_names,
+                owner_classes=owner_classes,
             )
             if (
                 target
@@ -377,6 +415,36 @@ class RelationLinker:
                     return cand
         return None
 
+    def _resolve_owner_member(
+        self,
+        clean: str,
+        parsed: FileParseResult,
+        local_aliases: dict[str, str] | None,
+        owner_classes: list[str],
+    ) -> str | None:
+        sym_table = self.index.symbol_table
+        seen: set[str] = set()
+        queue: list[str] = []
+        for owner in owner_classes:
+            cls_target = sym_table.get(owner) or self.resolve_symbol(
+                owner, parsed, local_aliases
+            )
+            if cls_target and cls_target not in seen:
+                seen.add(cls_target)
+                queue.append(cls_target)
+        # walk enclosing class and base classes
+        while queue:
+            curr = queue.pop(0)
+            cand = f"{curr}.{clean}"
+            if cand in sym_table:
+                return sym_table[cand]
+            if self.graph.has_node(curr):
+                for _, base, edata in self.graph.out_edges(curr, data=True):
+                    if edata.get("type") == EdgeType.INHERITS.value and str(base) not in seen:
+                        seen.add(str(base))
+                        queue.append(str(base))
+        return None
+
     def resolve_symbol(
         self,
         raw_name: str,
@@ -384,6 +452,7 @@ class RelationLinker:
         local_aliases: dict[str, str] | None = None,
         hint_classes: list[str] | None = None,
         shadowed: set[str] | None = None,
+        owner_classes: list[str] | None = None,
     ) -> str | None:
         """Resolve an identifier or dotted path against local scope, imports, and global index."""
         is_member = raw_name.startswith(("self.", "cls.", "this."))
@@ -399,6 +468,11 @@ class RelationLinker:
                 return alias_hit
 
         sym_table = self.index.symbol_table
+        if is_member and "." not in clean:
+            if owner_classes:
+                return self._resolve_owner_member(clean, parsed, local_aliases, owner_classes)
+            return None
+
         local_candidate = f"{parsed.module_fqn}.{clean}"
         if local_candidate in sym_table:
             return sym_table[local_candidate]
@@ -429,12 +503,13 @@ class RelationLinker:
         if len(suffix_matches) == 1:
             return suffix_matches[0]
 
-        short = clean.split(".")[-1]
-        matches = self._filter_global_candidates(
-            self.index.short_names.get(short), caller_is_test, bare_js
-        )
-        if len(matches) == 1:
-            return matches[0]
+        # restrict short_names lookup to bare calls
+        if "." not in clean and not is_member:
+            matches = self._filter_global_candidates(
+                self.index.short_names.get(clean), caller_is_test, bare_js
+            )
+            if len(matches) == 1:
+                return matches[0]
         return None
 
     def _filter_global_candidates(

@@ -1,5 +1,6 @@
 import os
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,7 +8,12 @@ import networkx as nx
 
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
-from astermesh.graph.filters import is_ignored_dir, is_ignored_file
+from astermesh.graph.filters import (
+    is_ignored_dir,
+    is_ignored_file,
+    is_minified_js,
+    is_saved_webpage_dir,
+)
 from astermesh.graph.model import CommunityInfo, EdgeType, NodeType
 from astermesh.serializers.compact_wire import estimate_tokens, render_compact_wire
 from astermesh.serializers.xml_context import render_semantic_xml
@@ -130,8 +136,15 @@ class BenchmarkMetrics:
 
 # token benchmark execution engine
 class TokenBenchmarkRunner:
-    def __init__(self, target_path: Path) -> None:
+    def __init__(
+        self,
+        target_path: Path,
+        exclude_patterns: Sequence[str] | None = None,
+        respect_gitignore: bool = False,
+    ) -> None:
         self.target_path = target_path.resolve()
+        self.exclude_patterns = exclude_patterns
+        self.respect_gitignore = respect_gitignore
 
     def count_tokens(self, text: str) -> int:
         return estimate_tokens(text)
@@ -141,20 +154,38 @@ class TokenBenchmarkRunner:
         max_tokens: int | None = None,
         include_xml_legacy: bool = False,
     ) -> BenchmarkMetrics:
-        builder = GraphBuilder(self.target_path)
+        builder = GraphBuilder(
+            self.target_path,
+            exclude_patterns=self.exclude_patterns,
+            respect_gitignore=self.respect_gitignore,
+        )
         supported_exts = builder.parser.supported_extensions
 
         # collect raw codebase files
         raw_files = 0
         raw_chunks: list[str] = []
         for dirpath, dirnames, filenames in os.walk(self.target_path):
-            dirnames[:] = [d for d in dirnames if not is_ignored_dir(d)]
             curr = Path(dirpath)
+            rel_dir = curr.relative_to(self.target_path).as_posix()
+            sibling_lower = {f.lower() for f in filenames}
+            kept_dirs: list[str] = []
+            for d in dirnames:
+                if is_ignored_dir(d) or is_saved_webpage_dir(d, sibling_lower):
+                    continue
+                rel_sub = d if rel_dir == "." else f"{rel_dir}/{d}"
+                if builder.is_excluded(rel_sub, is_dir=True):
+                    continue
+                kept_dirs.append(d)
+            dirnames[:] = kept_dirs
+
             for fname in filenames:
                 if is_ignored_file(fname):
                     continue
                 fpath = curr / fname
-                if fpath.suffix.lower() in supported_exts:
+                rel_file = fpath.relative_to(self.target_path).as_posix()
+                if builder.is_excluded(rel_file, is_dir=False):
+                    continue
+                if fpath.suffix.lower() in supported_exts and not is_minified_js(fpath):
                     raw_files += 1
                     try:
                         raw_chunks.append(fpath.read_text(encoding="utf-8", errors="replace"))

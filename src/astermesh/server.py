@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -66,11 +67,19 @@ Recommended workflow for code intelligence:
 
 # initialize mcp daemon server
 def create_mcp_server(
-    root_path: Path, watch: bool = True, context_max_tokens: int | None = None
+    root_path: Path,
+    watch: bool = True,
+    context_max_tokens: int | None = None,
+    exclude_patterns: Sequence[str] | None = None,
+    respect_gitignore: bool = False,
 ) -> MCPServer:
     resolved_root = root_path.resolve()
     mcp = MCPServer(name="Astermesh", instructions=SERVER_INSTRUCTIONS)
-    builder = GraphBuilder(resolved_root)
+    builder = GraphBuilder(
+        resolved_root,
+        exclude_patterns=exclude_patterns,
+        respect_gitignore=respect_gitignore,
+    )
     clusterer = CommunityClusterer()
     communities_list: list[CommunityInfo] = []
     community_index: dict[str, CommunityInfo] = {}
@@ -111,13 +120,19 @@ def create_mcp_server(
 
     @mcp.resource("codebase://communities")
     def get_codebase_communities() -> str:
-        """List all discovered Leiden architectural communities and their central God nodes."""
+        """List functional Leiden architectural communities and summarize size-1 singletons."""
         with builder.lock:
             lines = ["# Discovered Architectural Communities"]
-            for c in communities_list:
+            functional = [c for c in communities_list if c.size >= 2]
+            singleton_count = sum(1 for c in communities_list if c.size <= 1)
+            for c in functional:
                 lines.append(
                     f"- Community [{c.id}] `{c.name}`: "
                     f"God Node=`{c.god_node}`, Size={c.size} entities"
+                )
+            if singleton_count > 0:
+                lines.append(
+                    f"- Isolated Singletons (size=1): {singleton_count} standalone entities"
                 )
             return "\n".join(lines)
 

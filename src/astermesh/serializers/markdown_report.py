@@ -67,8 +67,14 @@ def render_markdown_report(
         "| :--- | :--- | :--- | :--- |",
     ]
 
-    for c in communities[:8]:
+    functional = [c for c in communities if c.size >= 2]
+    singleton_count = sum(1 for c in communities if c.size <= 1)
+
+    for c in functional[:8]:
         lines.append(f"| {c.id} | `{c.name}` | `{c.god_node}` | {c.size} entities |")
+
+    if singleton_count > 0:
+        lines.append(f"\n- Isolated Singletons (size=1): {singleton_count} standalone entities")
 
     lines.append("\n## 3. Top Core Hubs")
     for nid, deg in sorted_hubs:
