@@ -70,6 +70,11 @@ class RelationLinker:
                 owner_classes=owner_classes,
             )
 
+        # fallback file-level edge for unused asset imports
+        for alias_name, (asset_id, _) in asset_aliases.items():
+            if alias_name not in consumed_assets:
+                self._add_edge(rel_file, asset_id, EdgeType.IMPORTS)
+
     @staticmethod
     def _lookup_enclosing(fqn: str | None, table: dict[str, list[str]]) -> list[str]:
         curr = fqn or ""
@@ -80,11 +85,6 @@ class RelationLinker:
                 break
             curr = curr.rsplit(".", 1)[0]
         return []
-
-        # fallback file-level edge for unused asset imports
-        for alias_name, (asset_id, _) in asset_aliases.items():
-            if alias_name not in consumed_assets:
-                self._add_edge(rel_file, asset_id, EdgeType.IMPORTS)
 
     def _link_imports(
         self, parsed: FileParseResult

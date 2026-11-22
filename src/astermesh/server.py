@@ -1,4 +1,10 @@
+import atexit
+import os
+import sys
 import threading
+import unicodedata
+import weakref
+from collections import OrderedDict
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -26,6 +32,61 @@ _PROJECT_MARKERS = (
     ".astermesh",
 )
 
+DEFAULT_MAX_WORKSPACES = 3
+
+
+class _WorkspaceError(ValueError):
+    """Raised when a requested workspace path is invalid or unbound."""
+
+
+def _is_case_insensitive_fs(path: Path) -> bool:
+    if os.name == "nt":
+        return True
+    if sys.platform != "darwin":
+        return False
+    name = path.name
+    swapped = name.swapcase()
+    if swapped == name:
+        return True
+    try:
+        cand = path.with_name(swapped)
+        return cand.exists() and os.path.samefile(path, cand)
+    except OSError:
+        return True
+
+
+# normalize folder key across os platforms
+def _canonical_path_key(path: Path) -> str:
+    resolved = path.resolve()
+    text = unicodedata.normalize("NFC", os.path.normcase(str(resolved)))
+    if _is_case_insensitive_fs(resolved):
+        return text.casefold()
+    return text
+
+
+def _has_project_marker(directory: Path) -> bool:
+    return any((directory / marker).exists() for marker in _PROJECT_MARKERS)
+
+
+# block accidental indexing of system roots
+def _is_unsafe_default_root(directory: Path) -> bool:
+    resolved = directory.resolve()
+    if resolved == resolved.parent:
+        return True
+    if sys.platform == "darwin" and resolved in {
+        Path("/Users"),
+        Path("/Volumes"),
+        Path("/System"),
+        Path("/Applications"),
+    }:
+        return True
+    try:
+        if resolved == Path.home().resolve():
+            return True
+    except RuntimeError:
+        pass
+    return False
+
 
 def _infer_workspace_from_path(candidate: Path) -> Path | None:
     """Walk up from a file or directory path to find the nearest project root."""
@@ -36,7 +97,7 @@ def _infer_workspace_from_path(candidate: Path) -> Path | None:
     if curr.is_file():
         curr = curr.parent
     for directory in (curr, *curr.parents):
-        if any((directory / marker).exists() for marker in _PROJECT_MARKERS):
+        if _has_project_marker(directory):
             return directory
     return curr if curr.is_dir() else None
 
@@ -52,6 +113,7 @@ class _WorkspaceState:
         respect_gitignore: bool,
     ) -> None:
         self.root = root_path.resolve()
+        self.key = _canonical_path_key(self.root)
         self.builder = GraphBuilder(
             self.root,
             exclude_patterns=exclude_patterns,
@@ -61,13 +123,38 @@ class _WorkspaceState:
         self.communities_list: list[CommunityInfo] = []
         self.community_index: dict[str, CommunityInfo] = {}
         self.watcher: WorkspaceWatcher | None = None
+        self._watch_enabled = watch
+        self._watcher_lock = threading.Lock()
 
         self.builder.build_full()
         self.refresh_clusters()
 
         if watch:
-            self.watcher = WorkspaceWatcher(self.builder, on_updated=self.refresh_clusters)
-            self.watcher.start()
+            self.start_watcher()
+
+    def start_watcher(self) -> None:
+        if not self._watch_enabled:
+            return
+        with self._watcher_lock:
+            if self.watcher is not None:
+                return
+            watcher = WorkspaceWatcher(self.builder, on_updated=self.refresh_clusters)
+            if watcher.start():
+                self.watcher = watcher
+
+    def stop_watcher(self) -> None:
+        with self._watcher_lock:
+            watcher = self.watcher
+            self.watcher = None
+        if watcher is not None:
+            watcher.stop()
+
+    def close(self) -> None:
+        self.stop_watcher()
+        with self.builder.lock:
+            self.builder.graph.clear()
+            self.communities_list.clear()
+            self.community_index.clear()
 
     def refresh_clusters(self) -> None:
         with self.builder.lock:
@@ -78,6 +165,195 @@ class _WorkspaceState:
             for c in comms:
                 self.community_index[c.name.lower()] = c
                 self.community_index[c.id.lower()] = c
+
+
+# folder-partitioned lru workspace cache
+class _WorkspaceRegistry:
+    def __init__(
+        self,
+        watch: bool,
+        exclude_patterns: Sequence[str] | None,
+        respect_gitignore: bool,
+        max_workspaces: int = DEFAULT_MAX_WORKSPACES,
+        active_only_watcher: bool | None = None,
+    ) -> None:
+        self._watch = watch
+        self._exclude_patterns = exclude_patterns
+        self._respect_gitignore = respect_gitignore
+        self._max_workspaces = max(1, max_workspaces)
+        # windows handles and macos fsevents limits
+        self._active_only_watcher = (
+            (os.name == "nt" or sys.platform == "darwin")
+            if active_only_watcher is None
+            else active_only_watcher
+        )
+        self._registry_lock = threading.RLock()
+        self._workspaces: OrderedDict[str, _WorkspaceState] = OrderedDict()
+        self._folder_locks: dict[str, threading.Lock] = {}
+        self._active_key: str | None = None
+
+        reg_ref = weakref.ref(self)
+
+        def _cleanup() -> None:
+            reg = reg_ref()
+            if reg is not None:
+                reg.close_all()
+
+        atexit.register(_cleanup)
+
+    def cached_paths(self) -> list[str]:
+        with self._registry_lock:
+            return [st.root.as_posix() for st in self._workspaces.values()]
+
+    def _find_cached_parent(self, target_path: Path) -> Path | None:
+        try:
+            resolved = target_path.resolve()
+        except OSError:
+            return None
+        best_root: Path | None = None
+        best_depth = -1
+        with self._registry_lock:
+            for st in self._workspaces.values():
+                try:
+                    if resolved == st.root or resolved.is_relative_to(st.root):
+                        depth = len(st.root.parts)
+                        if depth > best_depth:
+                            best_depth = depth
+                            best_root = st.root
+                except ValueError:
+                    continue
+        return best_root
+
+    # explicit path branching across folders
+    def _resolve_root(
+        self,
+        workspace_path: str | None = None,
+        file_hint: str | None = None,
+    ) -> Path:
+        if workspace_path is not None and workspace_path.strip():
+            raw = workspace_path.strip()
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                with self._registry_lock:
+                    active = (
+                        self._workspaces.get(self._active_key)
+                        if self._active_key is not None
+                        else None
+                    )
+                if active is not None and not candidate.exists():
+                    rel_cand = active.root / candidate
+                    if rel_cand.exists():
+                        candidate = rel_cand
+            if not candidate.exists():
+                raise _WorkspaceError(f"Workspace path '{workspace_path}' does not exist.")
+            if candidate.is_file():
+                inferred = _infer_workspace_from_path(candidate)
+                return inferred if inferred is not None else candidate.parent.resolve()
+            return candidate.resolve()
+
+        if file_hint and file_hint.strip():
+            hint_path = Path(file_hint.strip())
+            if hint_path.is_absolute():
+                cached_parent = self._find_cached_parent(hint_path)
+                if cached_parent is not None:
+                    return cached_parent
+                if hint_path.exists():
+                    inferred = _infer_workspace_from_path(hint_path)
+                    if inferred is not None:
+                        return inferred
+
+        with self._registry_lock:
+            if self._active_key is not None and self._active_key in self._workspaces:
+                return self._workspaces[self._active_key].root
+
+        cwd = Path.cwd().resolve()
+        if _is_unsafe_default_root(cwd) or not _has_project_marker(cwd):
+            raise _WorkspaceError(
+                "No active workspace is bound. Pass 'workspace_path' with the absolute path "
+                "to your project root."
+            )
+        return cwd
+
+    def _activate_locked(self, key: str) -> tuple[_WorkspaceState, list[_WorkspaceState]]:
+        to_pause: list[_WorkspaceState] = []
+        prev_key = self._active_key
+        if (
+            self._active_only_watcher
+            and prev_key is not None
+            and prev_key != key
+            and prev_key in self._workspaces
+        ):
+            to_pause.append(self._workspaces[prev_key])
+        self._workspaces.move_to_end(key)
+        self._active_key = key
+        return self._workspaces[key], to_pause
+
+    def get_state(
+        self,
+        workspace_path: str | None = None,
+        file_hint: str | None = None,
+    ) -> _WorkspaceState:
+        target_root = self._resolve_root(workspace_path, file_hint)
+        key = _canonical_path_key(target_root)
+
+        with self._registry_lock:
+            if key in self._workspaces:
+                state, to_pause = self._activate_locked(key)
+            else:
+                state = None
+                to_pause = []
+                folder_lock = self._folder_locks.setdefault(key, threading.Lock())
+
+        if state is not None:
+            for prev in to_pause:
+                prev.stop_watcher()
+            if self._active_only_watcher:
+                state.start_watcher()
+            return state
+
+        evicted: list[_WorkspaceState] = []
+        with folder_lock:
+            with self._registry_lock:
+                if key in self._workspaces:
+                    state, to_pause = self._activate_locked(key)
+                else:
+                    state = None
+                    to_pause = []
+
+            if state is None:
+                built = _WorkspaceState(
+                    target_root,
+                    watch=self._watch,
+                    exclude_patterns=self._exclude_patterns,
+                    respect_gitignore=self._respect_gitignore,
+                )
+                with self._registry_lock:
+                    self._workspaces[key] = built
+                    state, to_pause = self._activate_locked(key)
+                    while len(self._workspaces) > self._max_workspaces:
+                        ev_key, ev_state = self._workspaces.popitem(last=False)
+                        if ev_key == key:
+                            self._workspaces[ev_key] = ev_state
+                            break
+                        self._folder_locks.pop(ev_key, None)
+                        evicted.append(ev_state)
+
+        for prev in to_pause:
+            prev.stop_watcher()
+        for ev_state in evicted:
+            ev_state.close()
+        if self._active_only_watcher:
+            state.start_watcher()
+        return state
+
+    def close_all(self) -> None:
+        with self._registry_lock:
+            states = list(self._workspaces.values())
+            self._workspaces.clear()
+            self._folder_locks.clear()
+            self._active_key = None
+        for st in states:
+            st.close()
 
 
 # isolate single community with direct targets
@@ -142,53 +418,32 @@ def create_mcp_server(
     context_max_tokens: int | None = None,
     exclude_patterns: Sequence[str] | None = None,
     respect_gitignore: bool = False,
+    max_workspaces: int = DEFAULT_MAX_WORKSPACES,
 ) -> MCPServer:
     mcp = MCPServer(name="Astermesh", instructions=SERVER_INSTRUCTIONS)
-    registry_lock = threading.RLock()
-    workspaces: dict[Path, _WorkspaceState] = {}
-    active_root: Path | None = None
-
-    def get_state(
-        workspace_path: str | None = None,
-        file_hint: str | None = None,
-    ) -> _WorkspaceState:
-        nonlocal active_root
-        with registry_lock:
-            target_root: Path | None = None
-            if workspace_path and workspace_path.strip():
-                candidate = Path(workspace_path.strip())
-                if candidate.exists():
-                    target_root = (
-                        candidate.resolve()
-                        if candidate.is_dir()
-                        else candidate.parent.resolve()
-                    )
-            if target_root is None and file_hint:
-                hint_path = Path(file_hint)
-                if hint_path.is_absolute() and hint_path.exists():
-                    target_root = _infer_workspace_from_path(hint_path)
-            if target_root is None:
-                target_root = active_root if active_root is not None else Path.cwd().resolve()
-
-            state = workspaces.get(target_root)
-            if state is None:
-                state = _WorkspaceState(
-                    target_root,
-                    watch=watch,
-                    exclude_patterns=exclude_patterns,
-                    respect_gitignore=respect_gitignore,
-                )
-                workspaces[target_root] = state
-            active_root = target_root
-            return state
+    registry = _WorkspaceRegistry(
+        watch=watch,
+        exclude_patterns=exclude_patterns,
+        respect_gitignore=respect_gitignore,
+        max_workspaces=max_workspaces,
+    )
 
     if root_path is not None:
-        get_state(str(root_path))
+        registry.get_state(str(root_path))
+
+    def _ws_error_dict(exc: _WorkspaceError) -> dict[str, Any]:
+        return {
+            "error": str(exc),
+            "cached_workspaces": registry.cached_paths(),
+        }
 
     @mcp.resource("codebase://context")
     def get_codebase_context() -> str:
         """Dense line-compressed #ACN2 representation of the codebase knowledge graph."""
-        state = get_state()
+        try:
+            state = registry.get_state()
+        except _WorkspaceError as exc:
+            return f"# No Active Workspace\n{exc}\n"
         with state.builder.lock:
             return render_compact_wire(
                 state.builder.graph,
@@ -200,18 +455,27 @@ def create_mcp_server(
     @mcp.resource("codebase://report")
     def get_codebase_report() -> str:
         """Macro architectural summary including communities, core hubs, and dependency cycles."""
-        state = get_state()
+        try:
+            state = registry.get_state()
+        except _WorkspaceError as exc:
+            return f"# No Active Workspace\n\n{exc}\n"
         with state.builder.lock:
-            return render_markdown_report(
+            report = render_markdown_report(
                 state.builder.graph, state.communities_list, state.root.name
             )
+            return f"Workspace: `{state.root.as_posix()}`\n\n{report}"
 
     @mcp.resource("codebase://communities")
     def get_codebase_communities() -> str:
         """List functional Leiden architectural communities and summarize size-1 singletons."""
-        state = get_state()
+        try:
+            state = registry.get_state()
+        except _WorkspaceError as exc:
+            return f"# No Active Workspace\n\n{exc}\n"
         with state.builder.lock:
-            lines = ["# Discovered Architectural Communities"]
+            lines = [
+                f"# Discovered Architectural Communities (`{state.root.as_posix()}`)",
+            ]
             functional = [c for c in state.communities_list if c.size >= 2]
             singleton_count = sum(1 for c in state.communities_list if c.size <= 1)
             for c in functional:
@@ -239,7 +503,10 @@ def create_mcp_server(
         Returns:
             Community metadata with god_node, size, and member entity coordinates.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         with state.builder.lock:
             comm = state.community_index.get(name.lower())
             if not comm:
@@ -279,7 +546,10 @@ def create_mcp_server(
         Returns:
             Standalone #ACN2 payload scoped to the selected community and its direct targets.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return f"Error: {exc}"
         with state.builder.lock:
             comm = state.community_index.get(name.lower())
             if not comm:
@@ -309,9 +579,14 @@ def create_mcp_server(
         Returns:
             Dictionary with incoming_callers and outgoing_dependencies and line coordinates.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         with state.builder.lock:
-            return GraphQuery(state.builder.graph).neighbors(symbol, direction)
+            res = GraphQuery(state.builder.graph).neighbors(symbol, direction)
+            res["workspace"] = state.root.as_posix()
+            return res
 
     @mcp.tool()
     def get_impact_radius(
@@ -329,9 +604,14 @@ def create_mcp_server(
         Returns:
             Risk assessment (LOW/MEDIUM/HIGH), affected files, and callers grouped by hop depth.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         with state.builder.lock:
-            return GraphQuery(state.builder.graph).impact_radius(symbol, max_depth)
+            res = GraphQuery(state.builder.graph).impact_radius(symbol, max_depth)
+            res["workspace"] = state.root.as_posix()
+            return res
 
     @mcp.tool()
     def get_file_outline(
@@ -347,7 +627,10 @@ def create_mcp_server(
         Returns:
             Sorted list of all AST or satellite entities with physical [line_start, line_end].
         """
-        state = get_state(workspace_path, file_hint=file_path)
+        try:
+            state = registry.get_state(workspace_path, file_hint=file_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         query_path = file_path
         fp = Path(file_path)
         if fp.is_absolute():
@@ -356,7 +639,9 @@ def create_mcp_server(
             except ValueError:
                 query_path = file_path
         with state.builder.lock:
-            return GraphQuery(state.builder.graph).file_outline(query_path)
+            res = GraphQuery(state.builder.graph).file_outline(query_path)
+            res["workspace"] = state.root.as_posix()
+            return res
 
     @mcp.tool()
     def trace_path(
@@ -374,9 +659,14 @@ def create_mcp_server(
         Returns:
             Ordered list of node IDs forming the shortest path between source and target.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         with state.builder.lock:
-            return GraphQuery(state.builder.graph).trace_path(source, target)
+            res = GraphQuery(state.builder.graph).trace_path(source, target)
+            res["workspace"] = state.root.as_posix()
+            return res
 
     @mcp.tool()
     def locate_symbol(
@@ -392,7 +682,10 @@ def create_mcp_server(
         Returns:
             Up to 25 matching entity records with file_path, type, and [line_start, line_end].
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return [_ws_error_dict(exc)]
         with state.builder.lock:
             return GraphQuery(state.builder.graph).locate(name)
 
@@ -414,7 +707,10 @@ def create_mcp_server(
         Returns:
             Dictionary with resolved path, clamped line span, and line-numbered source snippet.
         """
-        state = get_state(workspace_path, file_hint=file_path)
+        try:
+            state = registry.get_state(workspace_path, file_hint=file_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         fp = Path(file_path)
         if fp.is_absolute():
             target = fp.resolve()
@@ -424,7 +720,10 @@ def create_mcp_server(
 
         if not target.is_relative_to(state.root) or not target.is_file():
             return {
-                "error": f"File '{file_path}' not found inside workspace '{state.root.as_posix()}'."
+                "error": (
+                    f"File '{file_path}' not found inside workspace '{state.root.as_posix()}'."
+                ),
+                "workspace": state.root.as_posix(),
             }
 
         try:
@@ -443,6 +742,7 @@ def create_mcp_server(
 
         numbered = "\n".join(f"{idx}: {all_lines[idx - 1]}" for idx in range(s, e + 1))
         return {
+            "workspace": state.root.as_posix(),
             "file_path": target.relative_to(state.root).as_posix(),
             "line_start": s,
             "line_end": e,
@@ -462,7 +762,10 @@ def create_mcp_server(
         Returns:
             Summary counts of indexed nodes, edges, and discovered architectural communities.
         """
-        state = get_state(workspace_path)
+        try:
+            state = registry.get_state(workspace_path)
+        except _WorkspaceError as exc:
+            return _ws_error_dict(exc)
         with state.builder.lock:
             state.builder.build_full()
             state.refresh_clusters()

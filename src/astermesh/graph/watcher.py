@@ -1,5 +1,6 @@
 import os
 import threading
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
@@ -65,9 +66,10 @@ class GraphEventHandler(FileSystemEventHandler):
 
     def _relative_to_root(self, path: Path) -> str | None:
         try:
-            rel = path.resolve().relative_to(self.builder.root_path).as_posix()
+            raw_rel = path.resolve().relative_to(self.builder.root_path).as_posix()
         except (OSError, ValueError):
             return None
+        rel = unicodedata.normalize("NFC", raw_rel)
         if is_ignored_dir(rel):
             return None
         is_dir = path.is_dir()
@@ -124,6 +126,12 @@ class GraphEventHandler(FileSystemEventHandler):
             if reloaded or self._is_supported_file(src_path) or dest_rel is not None:
                 self._schedule_callback()
 
+    def cancel_timer(self) -> None:
+        with self._lock:
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+
     def _schedule_callback(self) -> None:
         if not self.on_updated:
             return
@@ -148,12 +156,33 @@ class WorkspaceWatcher:
         self.handler = GraphEventHandler(
             builder, on_updated=on_updated, debounce_sec=debounce_sec
         )
+        self._started = False
 
-    def start(self) -> None:
-        self.observer.schedule(self.handler, str(self.builder.root_path), recursive=True)
-        self.observer.daemon = True
-        self.observer.start()
+    def start(self) -> bool:
+        if self._started:
+            return True
+        try:
+            self.observer.schedule(self.handler, str(self.builder.root_path), recursive=True)
+            self.observer.daemon = True
+            self.observer.start()
+            self._started = True
+            return True
+        except (OSError, RuntimeError):
+            try:
+                self.observer.unschedule_all()
+            except (OSError, RuntimeError):
+                pass
+            return False
 
     def stop(self) -> None:
-        self.observer.stop()
-        self.observer.join(timeout=2.0)
+        self.handler.cancel_timer()
+        if not self._started:
+            return
+        self._started = False
+        try:
+            self.observer.unschedule_all()
+            self.observer.stop()
+            if self.observer.is_alive():
+                self.observer.join(timeout=2.0)
+        except (OSError, RuntimeError):
+            return

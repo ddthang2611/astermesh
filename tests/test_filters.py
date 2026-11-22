@@ -17,7 +17,9 @@ def test_saved_webpage_dir_filtered_in_builder_and_watcher(tmp_path: Path):
     (tmp_path / "Page_files").mkdir()
     (tmp_path / "Page_files/vendor.js").write_text("export function noise() {}\n", encoding="utf-8")
     (tmp_path / "media_files").mkdir()
-    (tmp_path / "media_files/real.py").write_text("def keep_me():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "media_files/real.py").write_text(
+        "def keep_me():\n    return 1\n", encoding="utf-8"
+    )
 
     assert is_saved_webpage_dir("Page_files", {"Page.html"})
     assert is_saved_webpage_dir("page_files", {"Page.HTM"})

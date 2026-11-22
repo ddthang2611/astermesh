@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 import astermesh
-from astermesh.server import create_mcp_server
+from astermesh.server import _WorkspaceRegistry, create_mcp_server
 
 
 def _tool_text(res: Any) -> str:
@@ -151,4 +151,107 @@ def test_server_dynamic_multi_workspace_switching(tmp_path: Path) -> None:
         assert "func_beta" in _tool_text(res_b_active)
 
     asyncio.run(_run())
+
+
+# workspace path branching and validation
+def test_server_workspace_path_branching_and_validation(tmp_path: Path) -> None:
+    proj = tmp_path / "repo_one"
+    (proj / "src" / "core").mkdir(parents=True)
+    (proj / "pyproject.toml").write_text("[project]\nname = 'repo-one'\n", encoding="utf-8")
+    mod_file = proj / "src" / "core" / "worker.py"
+    mod_file.write_text("def run_worker(): return 1\n", encoding="utf-8")
+
+    async def _run() -> None:
+        server = create_mcp_server(root_path=proj, watch=False)
+
+        # reject nonexistent workspace path
+        bad = await server.call_tool(
+            "get_community",
+            {"name": "C1", "workspace_path": str(tmp_path / "missing_repo")},
+        )
+        bad_payload = json.loads(_tool_text(bad))
+        assert "error" in bad_payload
+        assert proj.resolve().as_posix() in bad_payload["cached_workspaces"]
+
+        bad_loc = await server.call_tool(
+            "locate_symbol",
+            {"name": "run_worker", "workspace_path": str(tmp_path / "missing_repo")},
+        )
+        assert "error" in json.loads(_tool_text(bad_loc))
+
+        # infer root from nested file
+        rebuilt = await server.call_tool("rebuild_graph", {"workspace_path": str(mod_file)})
+        rebuilt_payload = json.loads(_tool_text(rebuilt))
+        assert rebuilt_payload["workspace"] == proj.resolve().as_posix()
+
+        # report includes bound workspace
+        rep = str(await server.read_resource("codebase://report"))
+        assert proj.resolve().as_posix() in rep
+
+    asyncio.run(_run())
+
+
+# lru eviction and active watcher
+def test_workspace_registry_lru_eviction_and_active_only_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dirs: list[Path] = []
+    for idx in range(3):
+        d = tmp_path / f"ws_{idx}"
+        d.mkdir()
+        (d / "pyproject.toml").write_text(f"[project]\nname = 'ws{idx}'\n", encoding="utf-8")
+        (d / "mod.py").write_text(f"def fn_{idx}(): return {idx}\n", encoding="utf-8")
+        dirs.append(d)
+
+    # evict oldest workspace watcher
+    reg = _WorkspaceRegistry(
+        watch=True,
+        exclude_patterns=None,
+        respect_gitignore=False,
+        max_workspaces=2,
+        active_only_watcher=False,
+    )
+    try:
+        st0 = reg.get_state(str(dirs[0]))
+        st1 = reg.get_state(str(dirs[1]))
+        assert st0.watcher is not None
+        assert st1.watcher is not None
+        _ = reg.get_state(str(dirs[2]))
+        assert len(reg.cached_paths()) == 2
+        assert st0.watcher is None
+    finally:
+        reg.close_all()
+
+    # windows active-only watcher release
+    win_reg = _WorkspaceRegistry(
+        watch=True,
+        exclude_patterns=None,
+        respect_gitignore=False,
+        max_workspaces=3,
+        active_only_watcher=True,
+    )
+    try:
+        w0 = win_reg.get_state(str(dirs[0]))
+        assert w0.watcher is not None
+        w1 = win_reg.get_state(str(dirs[1]))
+        assert w0.watcher is None
+        assert w1.watcher is not None
+        # reuse cached folder graph
+        w0_again = win_reg.get_state(str(dirs[0]))
+        assert w0_again is w0
+        assert w0.watcher is not None
+        assert w1.watcher is None
+    finally:
+        win_reg.close_all()
+
+    # block home directory fallback
+    monkeypatch.chdir(Path.home())
+    server = create_mcp_server(root_path=None, watch=False)
+
+    async def _check_unbound() -> None:
+        rep = str(await server.read_resource("codebase://report"))
+        assert "No Active Workspace" in rep
+
+    asyncio.run(_check_unbound())
+
 

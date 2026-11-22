@@ -167,6 +167,10 @@ def serve(
         bool,
         typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
     ] = False,
+    max_workspaces: Annotated[
+        int,
+        typer.Option("--max-workspaces", min=1, help="Max cached workspaces in global mode"),
+    ] = 3,
 ) -> None:
     mcp = create_mcp_server(
         path,
@@ -174,6 +178,7 @@ def serve(
         context_max_tokens=context_max_tokens,
         exclude_patterns=exclude,
         respect_gitignore=respect_gitignore,
+        max_workspaces=max_workspaces,
     )
     if transport == TransportType.sse:
         mcp.run(transport="sse", host=host, port=port)
