@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,71 @@ from astermesh.graph.query import GraphQuery
 from astermesh.graph.watcher import WorkspaceWatcher
 from astermesh.serializers.compact_wire import render_compact_wire
 from astermesh.serializers.markdown_report import render_markdown_report
+
+_PROJECT_MARKERS = (
+    ".git",
+    "package.json",
+    "pyproject.toml",
+    "tsconfig.json",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "requirements.txt",
+    ".astermesh",
+)
+
+
+def _infer_workspace_from_path(candidate: Path) -> Path | None:
+    """Walk up from a file or directory path to find the nearest project root."""
+    try:
+        curr = candidate.resolve()
+    except OSError:
+        return None
+    if curr.is_file():
+        curr = curr.parent
+    for directory in (curr, *curr.parents):
+        if any((directory / marker).exists() for marker in _PROJECT_MARKERS):
+            return directory
+    return curr if curr.is_dir() else None
+
+
+class _WorkspaceState:
+    """Holds in-memory knowledge graph, Leiden clusters, and live watcher for a repo."""
+
+    def __init__(
+        self,
+        root_path: Path,
+        watch: bool,
+        exclude_patterns: Sequence[str] | None,
+        respect_gitignore: bool,
+    ) -> None:
+        self.root = root_path.resolve()
+        self.builder = GraphBuilder(
+            self.root,
+            exclude_patterns=exclude_patterns,
+            respect_gitignore=respect_gitignore,
+        )
+        self.clusterer = CommunityClusterer()
+        self.communities_list: list[CommunityInfo] = []
+        self.community_index: dict[str, CommunityInfo] = {}
+        self.watcher: WorkspaceWatcher | None = None
+
+        self.builder.build_full()
+        self.refresh_clusters()
+
+        if watch:
+            self.watcher = WorkspaceWatcher(self.builder, on_updated=self.refresh_clusters)
+            self.watcher.start()
+
+    def refresh_clusters(self) -> None:
+        with self.builder.lock:
+            comms = self.clusterer.cluster(self.builder.graph)
+            self.communities_list.clear()
+            self.communities_list.extend(comms)
+            self.community_index.clear()
+            for c in comms:
+                self.community_index[c.name.lower()] = c
+                self.community_index[c.id.lower()] = c
 
 
 # isolate single community with direct targets
@@ -47,13 +113,17 @@ SERVER_INSTRUCTIONS = """
 Astermesh provides a deterministic in-memory code knowledge graph and context layer.
 It indexes physical AST entities (Python, JS/TS, React, Vue, Svelte, Angular),
 satellite configs (.toml, .json, .md), isolated assets, and functional communities.
+It supports dynamic multi-workspace switching across any repository on disk:
+pass `workspace_path` (the absolute path of the current project workspace) on your first tool call
+or when switching repositories.
 
 Available MCP Resources:
-- `codebase://context`: Dense #ACN2 wire representation (L0/L1/L2) of the repository graph.
+- `codebase://context`: Dense #ACN2 wire representation (L0/L1/L2) of the active repository graph.
 - `codebase://report`: Macro architecture snapshot (communities, God nodes, dependency cycles).
 - `codebase://communities`: Summary list of all detected functional modules.
 
 Recommended workflow for code intelligence:
+- Pass `workspace_path` (current workspace directory) to bind/switch the active project on demand.
 - Use `get_community_wire` to zoom into a single functional community in dense #ACN2 notation.
 - Use `locate_symbol` to resolve file paths and physical line ranges [line_start, line_end].
 - Use `get_file_outline` to inspect the structural outline of any source or config/doc file.
@@ -67,64 +137,83 @@ Recommended workflow for code intelligence:
 
 # initialize mcp daemon server
 def create_mcp_server(
-    root_path: Path,
+    root_path: Path | None = None,
     watch: bool = True,
     context_max_tokens: int | None = None,
     exclude_patterns: Sequence[str] | None = None,
     respect_gitignore: bool = False,
 ) -> MCPServer:
-    resolved_root = root_path.resolve()
     mcp = MCPServer(name="Astermesh", instructions=SERVER_INSTRUCTIONS)
-    builder = GraphBuilder(
-        resolved_root,
-        exclude_patterns=exclude_patterns,
-        respect_gitignore=respect_gitignore,
-    )
-    clusterer = CommunityClusterer()
-    communities_list: list[CommunityInfo] = []
-    community_index: dict[str, CommunityInfo] = {}
+    registry_lock = threading.RLock()
+    workspaces: dict[Path, _WorkspaceState] = {}
+    active_root: Path | None = None
 
-    def refresh_clusters() -> None:
-        with builder.lock:
-            comms = clusterer.cluster(builder.graph)
-            communities_list.clear()
-            communities_list.extend(comms)
-            community_index.clear()
-            for c in comms:
-                community_index[c.name.lower()] = c
-                community_index[c.id.lower()] = c
+    def get_state(
+        workspace_path: str | None = None,
+        file_hint: str | None = None,
+    ) -> _WorkspaceState:
+        nonlocal active_root
+        with registry_lock:
+            target_root: Path | None = None
+            if workspace_path and workspace_path.strip():
+                candidate = Path(workspace_path.strip())
+                if candidate.exists():
+                    target_root = (
+                        candidate.resolve()
+                        if candidate.is_dir()
+                        else candidate.parent.resolve()
+                    )
+            if target_root is None and file_hint:
+                hint_path = Path(file_hint)
+                if hint_path.is_absolute() and hint_path.exists():
+                    target_root = _infer_workspace_from_path(hint_path)
+            if target_root is None:
+                target_root = active_root if active_root is not None else Path.cwd().resolve()
 
-    builder.build_full()
-    refresh_clusters()
+            state = workspaces.get(target_root)
+            if state is None:
+                state = _WorkspaceState(
+                    target_root,
+                    watch=watch,
+                    exclude_patterns=exclude_patterns,
+                    respect_gitignore=respect_gitignore,
+                )
+                workspaces[target_root] = state
+            active_root = target_root
+            return state
 
-    if watch:
-        watcher = WorkspaceWatcher(builder, on_updated=refresh_clusters)
-        watcher.start()
+    if root_path is not None:
+        get_state(str(root_path))
 
     @mcp.resource("codebase://context")
     def get_codebase_context() -> str:
         """Dense line-compressed #ACN2 representation of the codebase knowledge graph."""
-        with builder.lock:
+        state = get_state()
+        with state.builder.lock:
             return render_compact_wire(
-                builder.graph,
-                communities_list,
-                resolved_root.name,
+                state.builder.graph,
+                state.communities_list,
+                state.root.name,
                 max_tokens=context_max_tokens,
             )
 
     @mcp.resource("codebase://report")
     def get_codebase_report() -> str:
         """Macro architectural summary including communities, core hubs, and dependency cycles."""
-        with builder.lock:
-            return render_markdown_report(builder.graph, communities_list, resolved_root.name)
+        state = get_state()
+        with state.builder.lock:
+            return render_markdown_report(
+                state.builder.graph, state.communities_list, state.root.name
+            )
 
     @mcp.resource("codebase://communities")
     def get_codebase_communities() -> str:
         """List functional Leiden architectural communities and summarize size-1 singletons."""
-        with builder.lock:
+        state = get_state()
+        with state.builder.lock:
             lines = ["# Discovered Architectural Communities"]
-            functional = [c for c in communities_list if c.size >= 2]
-            singleton_count = sum(1 for c in communities_list if c.size <= 1)
+            functional = [c for c in state.communities_list if c.size >= 2]
+            singleton_count = sum(1 for c in state.communities_list if c.size <= 1)
             for c in functional:
                 lines.append(
                     f"- Community [{c.id}] `{c.name}`: "
@@ -137,146 +226,206 @@ def create_mcp_server(
             return "\n".join(lines)
 
     @mcp.tool()
-    def get_community(name: str) -> dict[str, Any]:
+    def get_community(
+        name: str,
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
         """Retrieve all entities belonging to a functional architectural community (Leiden cluster).
 
         Args:
             name: Community ID (e.g. 'C1') or community name (case-insensitive).
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Community metadata with god_node, size, and member entity coordinates.
         """
-        with builder.lock:
-            comm = community_index.get(name.lower())
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            comm = state.community_index.get(name.lower())
             if not comm:
-                available = [c.name for c in communities_list]
+                available = [c.name for c in state.communities_list]
                 return {
                     "error": f"Community '{name}' not found",
+                    "workspace": state.root.as_posix(),
                     "available_communities": available,
                 }
             members_info = [
-                dict(builder.graph.nodes[m])
+                dict(state.builder.graph.nodes[m])
                 for m in comm.members
-                if builder.graph.has_node(m)
+                if state.builder.graph.has_node(m)
             ]
             return {
                 "id": comm.id,
                 "name": comm.name,
                 "god_node": comm.god_node,
                 "size": comm.size,
+                "workspace": state.root.as_posix(),
                 "members": members_info,
             }
 
     @mcp.tool()
-    def get_community_wire(name: str, max_tokens: int | None = None) -> str:
+    def get_community_wire(
+        name: str,
+        max_tokens: int | None = None,
+        workspace_path: str | None = None,
+    ) -> str:
         """Render a single functional community in dense #ACN2 wire notation for targeted zoom-in.
 
         Args:
             name: Community ID (e.g. 'C1') or community name (case-insensitive).
             max_tokens: Optional token budget triggering L0/L1/L2 compression on the subgraph.
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Standalone #ACN2 payload scoped to the selected community and its direct targets.
         """
-        with builder.lock:
-            comm = community_index.get(name.lower())
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            comm = state.community_index.get(name.lower())
             if not comm:
-                available = ", ".join(f"{c.id}:{c.name}" for c in communities_list[:20])
+                available = ", ".join(f"{c.id}:{c.name}" for c in state.communities_list[:20])
                 return f"Error: Community '{name}' not found. Available: {available}"
-            sub = _build_community_subgraph(builder.graph, comm)
+            sub = _build_community_subgraph(state.builder.graph, comm)
             return render_compact_wire(
                 sub,
                 [comm],
-                resolved_root.name,
+                state.root.name,
                 max_tokens=max_tokens,
             )
 
     @mcp.tool()
-    def get_neighbors(symbol: str, direction: str = "both") -> dict[str, Any]:
+    def get_neighbors(
+        symbol: str,
+        direction: str = "both",
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
         """Retrieve 1-hop incoming callers/referrers and outgoing dependencies of a symbol or asset.
 
         Args:
             symbol: Symbol name, Class.method suffix, FQN, or relative asset path.
             direction: Edge traversal direction: 'in', 'out', or 'both' (default).
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Dictionary with incoming_callers and outgoing_dependencies and line coordinates.
         """
-        with builder.lock:
-            return GraphQuery(builder.graph).neighbors(symbol, direction)
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            return GraphQuery(state.builder.graph).neighbors(symbol, direction)
 
     @mcp.tool()
-    def get_impact_radius(symbol: str, max_depth: int = 2) -> dict[str, Any]:
+    def get_impact_radius(
+        symbol: str,
+        max_depth: int = 2,
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
         """Compute transitive blast radius and affected files when modifying a symbol or asset.
 
         Args:
             symbol: Symbol name, Class.method suffix, FQN, or asset file path.
             max_depth: Maximum number of reverse-dependency hops to scan (default: 2).
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Risk assessment (LOW/MEDIUM/HIGH), affected files, and callers grouped by hop depth.
         """
-        with builder.lock:
-            return GraphQuery(builder.graph).impact_radius(symbol, max_depth)
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            return GraphQuery(state.builder.graph).impact_radius(symbol, max_depth)
 
     @mcp.tool()
-    def get_file_outline(file_path: str) -> dict[str, Any]:
+    def get_file_outline(
+        file_path: str,
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
         """Extract the full structural outline (classes, functions, components, config) of a file.
 
         Args:
-            file_path: Workspace-relative or suffix file path (e.g. 'src/server.py', 'README.md').
+            file_path: Workspace-relative or absolute file path (e.g. 'src/server.py', 'README.md').
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Sorted list of all AST or satellite entities with physical [line_start, line_end].
         """
-        with builder.lock:
-            return GraphQuery(builder.graph).file_outline(file_path)
+        state = get_state(workspace_path, file_hint=file_path)
+        query_path = file_path
+        fp = Path(file_path)
+        if fp.is_absolute():
+            try:
+                query_path = fp.resolve().relative_to(state.root).as_posix()
+            except ValueError:
+                query_path = file_path
+        with state.builder.lock:
+            return GraphQuery(state.builder.graph).file_outline(query_path)
 
     @mcp.tool()
-    def trace_path(source: str, target: str) -> dict[str, Any]:
+    def trace_path(
+        source: str,
+        target: str,
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
         """Find the shortest dependency or interaction path between two entities in the codebase.
 
         Args:
             source: Starting symbol name, suffix, or node ID.
             target: Target symbol name, suffix, or node ID.
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Ordered list of node IDs forming the shortest path between source and target.
         """
-        with builder.lock:
-            return GraphQuery(builder.graph).trace_path(source, target)
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            return GraphQuery(state.builder.graph).trace_path(source, target)
 
     @mcp.tool()
-    def locate_symbol(name: str) -> list[dict[str, Any]]:
+    def locate_symbol(
+        name: str,
+        workspace_path: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Locate code symbols, UI components, hooks, config keys, or doc headings by name or FQN.
 
         Args:
             name: Search query matching bare symbol name, dot-path suffix, or partial FQN.
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Up to 25 matching entity records with file_path, type, and [line_start, line_end].
         """
-        with builder.lock:
-            return GraphQuery(builder.graph).locate(name)
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            return GraphQuery(state.builder.graph).locate(name)
 
     @mcp.tool()
     def read_file_snippet(
-        file_path: str, start_line: int = 1, end_line: int | None = None
+        file_path: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+        workspace_path: str | None = None,
     ) -> dict[str, Any]:
         """Read a targeted physical line slice from any source or configuration file in workspace.
 
         Args:
-            file_path: Relative file path within workspace root (e.g. 'src/astermesh/cli.py').
+            file_path: Relative or absolute file path within workspace root.
             start_line: 1-based starting line number (default: 1).
             end_line: 1-based inclusive ending line number (defaults to start_line + 120).
+            workspace_path: Optional absolute path to the project workspace root.
 
         Returns:
             Dictionary with resolved path, clamped line span, and line-numbered source snippet.
         """
-        clean_rel = file_path.replace("\\", "/").lstrip("/")
-        target = (resolved_root / clean_rel).resolve()
-        if not target.is_relative_to(resolved_root) or not target.is_file():
-            return {"error": f"File '{file_path}' not found inside workspace."}
+        state = get_state(workspace_path, file_hint=file_path)
+        fp = Path(file_path)
+        if fp.is_absolute():
+            target = fp.resolve()
+        else:
+            clean_rel = file_path.replace("\\", "/").lstrip("/")
+            target = (state.root / clean_rel).resolve()
+
+        if not target.is_relative_to(state.root) or not target.is_file():
+            return {
+                "error": f"File '{file_path}' not found inside workspace '{state.root.as_posix()}'."
+            }
 
         try:
             all_lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -294,7 +443,7 @@ def create_mcp_server(
 
         numbered = "\n".join(f"{idx}: {all_lines[idx - 1]}" for idx in range(s, e + 1))
         return {
-            "file_path": target.relative_to(resolved_root).as_posix(),
+            "file_path": target.relative_to(state.root).as_posix(),
             "line_start": s,
             "line_end": e,
             "total_lines": total,
@@ -302,20 +451,27 @@ def create_mcp_server(
         }
 
     @mcp.tool()
-    def rebuild_graph() -> dict[str, Any]:
-        """Trigger a full two-pass re-scan and Leiden re-clustering of the knowledge graph.
+    def rebuild_graph(
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Trigger a full two-pass re-scan and Leiden re-clustering, or switch active workspace.
+
+        Args:
+            workspace_path: Optional absolute path to the project workspace root to index.
 
         Returns:
             Summary counts of indexed nodes, edges, and discovered architectural communities.
         """
-        with builder.lock:
-            builder.build_full()
-            refresh_clusters()
+        state = get_state(workspace_path)
+        with state.builder.lock:
+            state.builder.build_full()
+            state.refresh_clusters()
             return {
                 "status": "rebuilt",
-                "nodes": builder.graph.number_of_nodes(),
-                "edges": builder.graph.number_of_edges(),
-                "communities": len(communities_list),
+                "workspace": state.root.as_posix(),
+                "nodes": state.builder.graph.number_of_nodes(),
+                "edges": state.builder.graph.number_of_edges(),
+                "communities": len(state.communities_list),
             }
 
     return mcp

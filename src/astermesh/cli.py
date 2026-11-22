@@ -134,7 +134,12 @@ def build(
 # run mcp daemon server command
 @app.command()
 def serve(
-    path: Annotated[Path, typer.Argument(help="Workspace root directory")] = Path("."),
+    path: Annotated[
+        Path | None,
+        typer.Argument(
+            help="Optional initial workspace root (dynamic multi-workspace mode if omitted)"
+        ),
+    ] = None,
     transport: Annotated[
         TransportType,
         typer.Option("--transport", help="MCP transport: stdio, sse, streamable-http"),

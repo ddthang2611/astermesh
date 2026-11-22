@@ -10,7 +10,7 @@ from astermesh.server import create_mcp_server
 
 
 def _tool_text(res: Any) -> str:
-    return str(res.content[0].text)
+    return str(res.content[0].text) if res.content else ""
 
 
 # kiem thu lazy export tren package goc
@@ -117,3 +117,38 @@ def test_server_communities_summarizes_singletons_and_excludes(tmp_path: Path) -
         assert "noise_fn" not in _tool_text(locate_noise)
 
     asyncio.run(_run())
+
+
+# kiem thu chuyen doi da project dong khong can hardcode root_path
+def test_server_dynamic_multi_workspace_switching(tmp_path: Path) -> None:
+    proj_a = tmp_path / "proj_a"
+    proj_b = tmp_path / "proj_b"
+    proj_a.mkdir()
+    proj_b.mkdir()
+    (proj_a / "a.py").write_text("def func_alpha(): return 'A'\n", encoding="utf-8")
+    (proj_b / "b.py").write_text("def func_beta(): return 'B'\n", encoding="utf-8")
+
+    async def _run() -> None:
+        server = create_mcp_server(root_path=None, watch=False)
+
+        res_a: Any = await server.call_tool(
+            "locate_symbol",
+            {"name": "func_alpha", "workspace_path": str(proj_a)},
+        )
+        assert "func_alpha" in _tool_text(res_a)
+
+        res_b: Any = await server.call_tool(
+            "locate_symbol",
+            {"name": "func_beta", "workspace_path": str(proj_b)},
+        )
+        assert "func_beta" in _tool_text(res_b)
+
+        # Active workspace is now proj_b even when workspace_path is omitted
+        res_b_active: Any = await server.call_tool(
+            "locate_symbol",
+            {"name": "func_beta"},
+        )
+        assert "func_beta" in _tool_text(res_b_active)
+
+    asyncio.run(_run())
+
