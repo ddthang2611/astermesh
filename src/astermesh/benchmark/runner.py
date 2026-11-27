@@ -13,8 +13,10 @@ from astermesh.graph.filters import (
     is_ignored_file,
     is_minified_js,
     is_saved_webpage_dir,
+    is_vendor_js_path,
 )
 from astermesh.graph.model import CommunityInfo, EdgeType, NodeType
+from astermesh.languages.registry import default_registry
 from astermesh.serializers.compact_wire import estimate_tokens, render_compact_wire
 from astermesh.serializers.xml_context import render_semantic_xml
 
@@ -159,7 +161,9 @@ class TokenBenchmarkRunner:
             exclude_patterns=self.exclude_patterns,
             respect_gitignore=self.respect_gitignore,
         )
-        supported_exts = builder.parser.supported_extensions
+        reg = default_registry()
+        supported_exts = reg.supported_extensions
+        plugin_ignores = reg.all_ignore_dirs()
 
         # collect raw codebase files
         raw_files = 0
@@ -170,7 +174,11 @@ class TokenBenchmarkRunner:
             sibling_lower = {f.lower() for f in filenames}
             kept_dirs: list[str] = []
             for d in dirnames:
-                if is_ignored_dir(d) or is_saved_webpage_dir(d, sibling_lower):
+                if (
+                    is_ignored_dir(d)
+                    or d in plugin_ignores
+                    or is_saved_webpage_dir(d, sibling_lower)
+                ):
                     continue
                 rel_sub = d if rel_dir == "." else f"{rel_dir}/{d}"
                 if builder.is_excluded(rel_sub, is_dir=True):
@@ -183,7 +191,7 @@ class TokenBenchmarkRunner:
                     continue
                 fpath = curr / fname
                 rel_file = fpath.relative_to(self.target_path).as_posix()
-                if builder.is_excluded(rel_file, is_dir=False):
+                if builder.is_excluded(rel_file, is_dir=False) or is_vendor_js_path(rel_file):
                     continue
                 if fpath.suffix.lower() in supported_exts and not is_minified_js(fpath):
                     raw_files += 1

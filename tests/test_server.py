@@ -15,7 +15,7 @@ def _tool_text(res: Any) -> str:
 
 # kiem thu lazy export tren package goc
 def test_package_version_and_lazy_getattr() -> None:
-    assert astermesh.__version__ == "1.3.4"
+    assert astermesh.__version__ == "1.4.0"
     assert astermesh.create_mcp_server is create_mcp_server
     with pytest.raises(AttributeError):
         _ = astermesh.non_existent_symbol
@@ -253,5 +253,105 @@ def test_workspace_registry_lru_eviction_and_active_only_watcher(
         assert "No Active Workspace" in rep
 
     asyncio.run(_check_unbound())
+
+
+# language and path_prefix mcp tool filters
+def test_server_language_and_path_prefix_filters(tmp_path: Path) -> None:
+    # arrange: bilingual repo with colliding getById
+    fe_dir = tmp_path / "waltz-ng" / "src"
+    be_dir = tmp_path / "waltz-be" / "src" / "main" / "java" / "com" / "acme"
+    fe_dir.mkdir(parents=True)
+    be_dir.mkdir(parents=True)
+
+    (fe_dir / "repo.ts").write_text(
+        "export function getById(id: string) { return id; }\n"
+        "export function loadUi() { return getById('1'); }\n",
+        encoding="utf-8",
+    )
+    (be_dir / "OrderRepo.java").write_text(
+        """package com.acme;
+
+public class OrderRepo {
+    public String getById(String id) { return id; }
+    public void handle() { getById("1"); }
+}
+""",
+        encoding="utf-8",
+    )
+
+    async def _run() -> None:
+        server = create_mcp_server(root_path=tmp_path, watch=False)
+
+        # act & assert: locate_symbol filtered by language
+        loc_java: Any = await server.call_tool(
+            "locate_symbol", {"name": "getById", "language": "java"}
+        )
+        loc_java_text = " ".join(str(c.text) for c in loc_java.content)
+        assert "com.acme.OrderRepo.getById" in loc_java_text
+        assert "waltz-ng.src.repo.getById" not in loc_java_text
+
+        loc_ts: Any = await server.call_tool(
+            "locate_symbol", {"name": "getById", "language": "ts"}
+        )
+        loc_ts_text = " ".join(str(c.text) for c in loc_ts.content)
+        assert "waltz-ng.src.repo.getById" in loc_ts_text
+        assert "com.acme.OrderRepo.getById" not in loc_ts_text
+
+        # act & assert: get_neighbors filtered by path_prefix
+        nbr_be = await server.call_tool(
+            "get_neighbors",
+            {"symbol": "getById", "direction": "in", "path_prefix": "waltz-be"},
+        )
+        nbr_be_payload = json.loads(_tool_text(nbr_be))
+        assert nbr_be_payload["symbol"] == "com.acme.OrderRepo.getById"
+        assert any(
+            c["id"] == "com.acme.OrderRepo.handle" for c in nbr_be_payload["incoming_callers"]
+        )
+
+        # act & assert: get_impact_radius filtered by language
+        imp_fe = await server.call_tool(
+            "get_impact_radius",
+            {"symbol": "getById", "max_depth": 2, "language": "js"},
+        )
+        imp_fe_payload = json.loads(_tool_text(imp_fe))
+        assert imp_fe_payload["target_symbol"] == "waltz-ng.src.repo.getById"
+        assert imp_fe_payload["total_affected_entities"] == 1
+        assert imp_fe_payload["affected_files"] == ["waltz-ng/src/repo.ts"]
+
+    asyncio.run(_run())
+
+
+# server version and single build on bind
+def test_server_reports_version_and_avoids_double_build_on_first_bind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj = tmp_path / "demo_repo"
+    proj.mkdir()
+    (proj / "app.py").write_text("def hello(): return 1\n", encoding="utf-8")
+
+    build_calls = 0
+    orig_build = astermesh.GraphBuilder.build_full
+
+    def counted_build(self: Any) -> Any:
+        nonlocal build_calls
+        build_calls += 1
+        return orig_build(self)
+
+    monkeypatch.setattr(astermesh.GraphBuilder, "build_full", counted_build)
+
+    async def _run() -> None:
+        server = create_mcp_server(root_path=None, watch=False)
+        assert server.version == astermesh.__version__
+
+        res = await server.call_tool("rebuild_graph", {"workspace_path": str(proj)})
+        assert json.loads(_tool_text(res))["status"] == "rebuilt"
+        assert build_calls == 1
+
+        res2 = await server.call_tool("rebuild_graph", {"workspace_path": str(proj)})
+        assert json.loads(_tool_text(res2))["status"] == "rebuilt"
+        assert build_calls == 2
+
+    asyncio.run(_run())
+
 
 

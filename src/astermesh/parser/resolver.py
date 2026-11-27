@@ -3,7 +3,10 @@ import os
 import posixpath
 import re
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
+
+from astermesh.graph.filters import is_ignored_dir, is_saved_webpage_dir
 
 SOURCE_PROBE_EXTS: tuple[str, ...] = (
     ".ts",
@@ -109,6 +112,15 @@ class _TrieNode:
         self.rule: tuple[bool, list[str]] | None = None
 
 
+# per-subroot tsconfig/jsconfig state
+@dataclass
+class _SubRootConfig:
+    sub_rel: str
+    trie_root: _TrieNode
+    has_aliases: bool
+    base_url: str | None
+
+
 # js/ts/bundler module and path alias resolver
 class ModuleResolver:
     def __init__(self, root_path: Path, max_cache: int = 4096) -> None:
@@ -116,6 +128,7 @@ class ModuleResolver:
         self._trie_root = _TrieNode()
         self._has_aliases = False
         self._base_url: str | None = None
+        self._sub_configs: list[_SubRootConfig] = []
         self._known_files: set[str] = set()
         self._dir_entries: dict[str, frozenset[str] | None] = {}
         self._max_cache = max_cache
@@ -131,13 +144,24 @@ class ModuleResolver:
         self._trie_root = _TrieNode()
         self._has_aliases = False
         self._base_url = None
+        self._sub_configs = []
         self._dir_entries.clear()
         self._load_tsconfig()
         self._cache.clear()
 
-    def _load_tsconfig(self) -> None:
+    def _anchor_base_url(self, sub_rel: str, raw_base: str) -> str:
+        cleaned = raw_base.replace("\\", "/").strip()
+        if cleaned in ("", ".", "./", "/"):
+            joined = sub_rel or "."
+        else:
+            rel_base = cleaned.lstrip("/")
+            joined = posixpath.join(sub_rel, rel_base) if sub_rel else rel_base
+        norm = posixpath.normpath(joined)
+        return "" if norm == "." else norm
+
+    def _parse_dir_config(self, cfg_dir: Path, sub_rel: str) -> _SubRootConfig | None:
         for cfg_name in ("tsconfig.json", "jsconfig.json"):
-            cfg_path = self.root_path / cfg_name
+            cfg_path = cfg_dir / cfg_name
             if not cfg_path.exists() or not cfg_path.is_file():
                 continue
             try:
@@ -150,10 +174,13 @@ class ModuleResolver:
             if not isinstance(opts, dict):
                 continue
 
+            trie_root = _TrieNode()
+            has_aliases = False
+            base_url: str | None = None
+
             raw_base = opts.get("baseUrl")
             if isinstance(raw_base, str):
-                norm_base = posixpath.normpath(raw_base.replace("\\", "/").strip("/"))
-                self._base_url = "" if norm_base == "." else norm_base
+                base_url = self._anchor_base_url(sub_rel, raw_base)
 
             paths = opts.get("paths")
             if isinstance(paths, dict):
@@ -161,24 +188,75 @@ class ModuleResolver:
                     if isinstance(pattern, str) and isinstance(targets, list):
                         str_targets = [t for t in targets if isinstance(t, str)]
                         if str_targets:
-                            self._insert_alias(pattern, str_targets)
-            break
+                            self._insert_alias(pattern, str_targets, trie_root)
+                            has_aliases = True
+            return _SubRootConfig(
+                sub_rel=sub_rel,
+                trie_root=trie_root,
+                has_aliases=has_aliases,
+                base_url=base_url,
+            )
+        return None
 
-    def _insert_alias(self, pattern: str, targets: list[str]) -> None:
+    def _load_tsconfig(self) -> None:
+        for dirpath, dirnames, filenames in os.walk(self.root_path):
+            curr_dir = Path(dirpath)
+            try:
+                rel_dir = curr_dir.relative_to(self.root_path).as_posix()
+            except ValueError:
+                continue
+            sibling_lower = {f.lower() for f in filenames}
+            kept_dirs: list[str] = []
+            for d in sorted(dirnames):
+                if is_ignored_dir(d) or is_saved_webpage_dir(d, sibling_lower):
+                    continue
+                kept_dirs.append(d)
+            dirnames[:] = kept_dirs
+
+            sub_rel = "" if rel_dir == "." else rel_dir
+            cfg = self._parse_dir_config(curr_dir, sub_rel)
+            if cfg is not None:
+                if sub_rel == "":
+                    self._trie_root = cfg.trie_root
+                    self._base_url = cfg.base_url
+                if cfg.has_aliases:
+                    self._has_aliases = True
+                if cfg.has_aliases or cfg.base_url is not None:
+                    self._sub_configs.append(cfg)
+
+        self._sub_configs.sort(key=lambda c: (-len(c.sub_rel), c.sub_rel))
+
+    def _insert_alias(
+        self, pattern: str, targets: list[str], trie_root: _TrieNode | None = None
+    ) -> None:
         has_wildcard = "*" in pattern
         prefix = pattern.split("*")[0].rstrip("/")
         segments = [s for s in prefix.split("/") if s]
-        node = self._trie_root
+        node = trie_root if trie_root is not None else self._trie_root
         for seg in segments:
             node = node.children.setdefault(seg, _TrieNode())
         node.rule = (has_wildcard, targets)
-        self._has_aliases = True
+        if trie_root is None:
+            self._has_aliases = True
 
-    def _match_alias(self, r_clean: str) -> list[str]:
-        if not self._has_aliases:
+    def _find_sub_config(self, source_dir: str) -> _SubRootConfig | None:
+        clean_dir = source_dir.strip("/")
+        if clean_dir == ".":
+            clean_dir = ""
+        for cfg in self._sub_configs:
+            if cfg.sub_rel == "":
+                return cfg
+            if clean_dir == cfg.sub_rel or clean_dir.startswith(f"{cfg.sub_rel}/"):
+                return cfg
+        return None
+
+    def _match_alias(self, r_clean: str, cfg: _SubRootConfig | None = None) -> list[str]:
+        trie_root = cfg.trie_root if cfg is not None else self._trie_root
+        has_aliases = cfg.has_aliases if cfg is not None else self._has_aliases
+        if not has_aliases:
             return []
         segments = [s for s in r_clean.split("/") if s]
-        node = self._trie_root
+        node = trie_root
         best_match: tuple[int, tuple[bool, list[str]]] | None = None
 
         if node.rule is not None:
@@ -200,12 +278,20 @@ class ModuleResolver:
             return []
 
         suffix = "/".join(segments[matched_len:])
+        base_url = cfg.base_url if cfg is not None else self._base_url
+        sub_rel = cfg.sub_rel if cfg is not None else ""
+        anchor = base_url if base_url is not None else sub_rel
+
         candidates: list[str] = []
-        base_prefix = f"{self._base_url}/" if self._base_url else ""
         for t in targets:
             norm_t = t.replace("\\", "/")
             expanded = norm_t.replace("*", suffix) if "*" in norm_t else norm_t
-            full = posixpath.normpath(f"{base_prefix}{expanded.lstrip('./')}")
+            if expanded.startswith("/"):
+                full = expanded
+            elif anchor:
+                full = posixpath.normpath(f"{anchor}/{expanded}")
+            else:
+                full = posixpath.normpath(expanded)
             candidates.append(full)
         return candidates
 
@@ -320,8 +406,10 @@ class ModuleResolver:
             self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
 
+        cfg = self._find_sub_config(source_dir)
         candidates: list[str] = []
-        alias_cands = self._match_alias(r_clean)
+        alias_cands = self._match_alias(r_clean, cfg) if cfg is not None else []
+        active_base_url = cfg.base_url if cfg is not None else None
         if alias_cands:
             candidates.extend(alias_cands)
         elif r_clean.startswith(("./", "../")) or r_clean in (".", ".."):
@@ -332,8 +420,8 @@ class ModuleResolver:
             stripped = r_clean.lstrip("/")
             candidates.append(posixpath.normpath(stripped))
             candidates.append(posixpath.normpath(f"public/{stripped}"))
-        elif self._base_url is not None:
-            joined = f"{self._base_url}/{r_clean}" if self._base_url else r_clean
+        elif active_base_url is not None:
+            joined = f"{active_base_url}/{r_clean}" if active_base_url else r_clean
             candidates.append(posixpath.normpath(joined))
         else:
             self._store_cache(cache_key, None)

@@ -126,3 +126,33 @@ def test_watcher_ignores_readonly_events_and_locks_reload(tmp_path: Path):
 
     assert lock_busy is True
     assert builder.resolver._has_aliases is True
+
+
+# watcher deleted event recovers shadowed js sibling
+def test_watcher_deleted_ts_triggers_shadowed_js_reindexing(tmp_path: Path) -> None:
+    # arrange
+    web_src = tmp_path / "web" / "src"
+    web_src.mkdir(parents=True)
+    ts_file = web_src / "math.ts"
+    js_file = web_src / "math.js"
+    ts_file.write_text("export function computeTotal(x: number) { return x; }\n", encoding="utf-8")
+    js_file.write_text("export function computeTotal(x) { return x + 1; }\n", encoding="utf-8")
+
+    builder = GraphBuilder(tmp_path)
+    builder.build_full()
+    assert builder.graph.has_node("web/src/math.ts")
+    assert not builder.graph.has_node("web/src/math.js")
+
+    fired = threading.Event()
+    handler = GraphEventHandler(builder, on_updated=fired.set, debounce_sec=0.01)
+
+    # act: delete shadowed ts file and dispatch deleted event
+    ts_file.unlink()
+    handler.on_any_event(FileDeletedEvent(str(ts_file)))
+
+    # assert: shadowed js sibling is re-indexed
+    assert not builder.graph.has_node("web/src/math.ts")
+    assert builder.graph.has_node("web/src/math.js")
+    assert builder.graph.has_node("web.src.math.computeTotal")
+    assert fired.wait(timeout=1.0)
+

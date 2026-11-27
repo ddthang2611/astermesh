@@ -209,6 +209,14 @@ def query(
         bool,
         typer.Option("--respect-gitignore", help="Also exclude patterns from .gitignore"),
     ] = False,
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Filter by language family or alias"),
+    ] = None,
+    path_prefix: Annotated[
+        str | None,
+        typer.Option("--path-prefix", help="Filter by POSIX path prefix"),
+    ] = None,
 ) -> None:
     builder = GraphBuilder(
         path, exclude_patterns=exclude, respect_gitignore=respect_gitignore
@@ -243,7 +251,7 @@ def query(
         return
 
     query_engine = GraphQuery(graph)
-    results = query_engine.locate(symbol)
+    results = query_engine.locate(symbol, language=language, path_prefix=path_prefix)
     if not results:
         typer.echo(f"Symbol '{symbol}' not found in codebase.")
         return

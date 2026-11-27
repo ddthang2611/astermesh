@@ -12,6 +12,7 @@ from typing import Any
 import networkx as nx
 from mcp.server.mcpserver import MCPServer
 
+from astermesh import __version__
 from astermesh.graph.builder import GraphBuilder
 from astermesh.graph.clustering import CommunityClusterer
 from astermesh.graph.model import WIRE_EDGE_TYPES, CommunityInfo
@@ -293,6 +294,14 @@ class _WorkspaceRegistry:
         workspace_path: str | None = None,
         file_hint: str | None = None,
     ) -> _WorkspaceState:
+        state, _ = self.get_or_build_state(workspace_path, file_hint)
+        return state
+
+    def get_or_build_state(
+        self,
+        workspace_path: str | None = None,
+        file_hint: str | None = None,
+    ) -> tuple[_WorkspaceState, bool]:
         target_root = self._resolve_root(workspace_path, file_hint)
         key = _canonical_path_key(target_root)
 
@@ -309,9 +318,10 @@ class _WorkspaceRegistry:
                 prev.stop_watcher()
             if self._active_only_watcher:
                 state.start_watcher()
-            return state
+            return state, True
 
         evicted: list[_WorkspaceState] = []
+        was_cached = True
         with folder_lock:
             with self._registry_lock:
                 if key in self._workspaces:
@@ -321,6 +331,7 @@ class _WorkspaceRegistry:
                     to_pause = []
 
             if state is None:
+                was_cached = False
                 built = _WorkspaceState(
                     target_root,
                     watch=self._watch,
@@ -344,7 +355,7 @@ class _WorkspaceRegistry:
             ev_state.close()
         if self._active_only_watcher:
             state.start_watcher()
-        return state
+        return state, was_cached
 
     def close_all(self) -> None:
         with self._registry_lock:
@@ -387,8 +398,9 @@ def _build_community_subgraph(
 
 SERVER_INSTRUCTIONS = """
 Astermesh provides a deterministic in-memory code knowledge graph and context layer.
-It indexes physical AST entities (Python, JS/TS, React, Vue, Svelte, Angular),
-satellite configs (.toml, .json, .md), isolated assets, and functional communities.
+It indexes physical AST entities (Python, Java, JS/TS, React, Vue, Svelte, Angular),
+satellite configs (.toml, .json, .md, pom.xml, build.gradle, .properties),
+isolated assets, and functional communities.
 It supports dynamic multi-workspace switching across any repository on disk:
 pass `workspace_path` (the absolute path of the current project workspace) on your first tool call
 or when switching repositories.
@@ -420,7 +432,11 @@ def create_mcp_server(
     respect_gitignore: bool = False,
     max_workspaces: int = DEFAULT_MAX_WORKSPACES,
 ) -> MCPServer:
-    mcp = MCPServer(name="Astermesh", instructions=SERVER_INSTRUCTIONS)
+    mcp = MCPServer(
+        name="Astermesh",
+        version=__version__,
+        instructions=SERVER_INSTRUCTIONS,
+    )
     registry = _WorkspaceRegistry(
         watch=watch,
         exclude_patterns=exclude_patterns,
@@ -568,6 +584,8 @@ def create_mcp_server(
         symbol: str,
         direction: str = "both",
         workspace_path: str | None = None,
+        language: str | None = None,
+        path_prefix: str | None = None,
     ) -> dict[str, Any]:
         """Retrieve 1-hop incoming callers/referrers and outgoing dependencies of a symbol or asset.
 
@@ -575,6 +593,8 @@ def create_mcp_server(
             symbol: Symbol name, Class.method suffix, FQN, or relative asset path.
             direction: Edge traversal direction: 'in', 'out', or 'both' (default).
             workspace_path: Optional absolute path to the project workspace root.
+            language: Optional language family or alias filter (e.g. 'py', 'ts', 'java').
+            path_prefix: Optional POSIX path prefix filter for disambiguating symbols.
 
         Returns:
             Dictionary with incoming_callers and outgoing_dependencies and line coordinates.
@@ -584,7 +604,9 @@ def create_mcp_server(
         except _WorkspaceError as exc:
             return _ws_error_dict(exc)
         with state.builder.lock:
-            res = GraphQuery(state.builder.graph).neighbors(symbol, direction)
+            res = GraphQuery(state.builder.graph).neighbors(
+                symbol, direction, language=language, path_prefix=path_prefix
+            )
             res["workspace"] = state.root.as_posix()
             return res
 
@@ -593,6 +615,8 @@ def create_mcp_server(
         symbol: str,
         max_depth: int = 2,
         workspace_path: str | None = None,
+        language: str | None = None,
+        path_prefix: str | None = None,
     ) -> dict[str, Any]:
         """Compute transitive blast radius and affected files when modifying a symbol or asset.
 
@@ -600,6 +624,8 @@ def create_mcp_server(
             symbol: Symbol name, Class.method suffix, FQN, or asset file path.
             max_depth: Maximum number of reverse-dependency hops to scan (default: 2).
             workspace_path: Optional absolute path to the project workspace root.
+            language: Optional language family or alias filter (e.g. 'py', 'ts', 'java').
+            path_prefix: Optional POSIX path prefix filter for disambiguating symbols.
 
         Returns:
             Risk assessment (LOW/MEDIUM/HIGH), affected files, and callers grouped by hop depth.
@@ -609,7 +635,9 @@ def create_mcp_server(
         except _WorkspaceError as exc:
             return _ws_error_dict(exc)
         with state.builder.lock:
-            res = GraphQuery(state.builder.graph).impact_radius(symbol, max_depth)
+            res = GraphQuery(state.builder.graph).impact_radius(
+                symbol, max_depth, language=language, path_prefix=path_prefix
+            )
             res["workspace"] = state.root.as_posix()
             return res
 
@@ -672,12 +700,16 @@ def create_mcp_server(
     def locate_symbol(
         name: str,
         workspace_path: str | None = None,
+        language: str | None = None,
+        path_prefix: str | None = None,
     ) -> list[dict[str, Any]]:
         """Locate code symbols, UI components, hooks, config keys, or doc headings by name or FQN.
 
         Args:
             name: Search query matching bare symbol name, dot-path suffix, or partial FQN.
             workspace_path: Optional absolute path to the project workspace root.
+            language: Optional language family or alias filter (e.g. 'py', 'ts', 'java').
+            path_prefix: Optional POSIX path prefix filter for disambiguating symbols.
 
         Returns:
             Up to 25 matching entity records with file_path, type, and [line_start, line_end].
@@ -687,7 +719,9 @@ def create_mcp_server(
         except _WorkspaceError as exc:
             return [_ws_error_dict(exc)]
         with state.builder.lock:
-            return GraphQuery(state.builder.graph).locate(name)
+            return GraphQuery(state.builder.graph).locate(
+                name, language=language, path_prefix=path_prefix
+            )
 
     @mcp.tool()
     def read_file_snippet(
@@ -763,12 +797,13 @@ def create_mcp_server(
             Summary counts of indexed nodes, edges, and discovered architectural communities.
         """
         try:
-            state = registry.get_state(workspace_path)
+            state, was_cached = registry.get_or_build_state(workspace_path)
         except _WorkspaceError as exc:
             return _ws_error_dict(exc)
         with state.builder.lock:
-            state.builder.build_full()
-            state.refresh_clusters()
+            if was_cached:
+                state.builder.build_full()
+                state.refresh_clusters()
             return {
                 "status": "rebuilt",
                 "workspace": state.root.as_posix(),

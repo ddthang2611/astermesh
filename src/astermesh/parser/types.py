@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 
 # static import specification container
-@dataclass
+@dataclass(slots=True)
 class ImportSpec:
     local_name: str | None
     raw_specifier: str
@@ -13,7 +13,7 @@ class ImportSpec:
 
 
 # barrel re-export specification container
-@dataclass
+@dataclass(slots=True)
 class ReexportSpec:
     raw_specifier: str
     exported_name: str | None = None
@@ -22,8 +22,18 @@ class ReexportSpec:
     is_namespace: bool = False
 
 
+# method call site metadata
+@dataclass(slots=True)
+class CallSite:
+    raw_name: str
+    arity: int = 0
+    receiver_var: str | None = None
+    chain: tuple[tuple[str, int], ...] = ()
+    arg_types: tuple[str, ...] = ()
+
+
 # raw entity extracted from ast
-@dataclass
+@dataclass(slots=True)
 class RawEntity:
     name: str
     fqn: str
@@ -43,10 +53,19 @@ class RawEntity:
     is_async: bool = False
     is_method: bool = False
     is_exported: bool = False
+    language_family: str = ""
+    namespace_fqn: str = ""
+    return_type: str | None = None
+    param_types: list[str] = field(default_factory=list)
+    var_types: dict[str, str] = field(default_factory=dict)
+    field_types: dict[str, str] = field(default_factory=dict)
+    call_sites: list[CallSite] = field(default_factory=list)
+    annotations: list[str] = field(default_factory=list)
+    modifiers: set[str] = field(default_factory=set)
 
 
 # file parsing outcome container
-@dataclass
+@dataclass(slots=True)
 class FileParseResult:
     file_path: str
     module_fqn: str
@@ -58,3 +77,10 @@ class FileParseResult:
     export_aliases: dict[str, str] = field(default_factory=dict)
     reexports: list[ReexportSpec] = field(default_factory=list)
     language: str = "unknown"
+    language_family: str = ""
+    namespace_fqn: str = ""
+    wildcard_imports: list[str] = field(default_factory=list)
+    static_imports: dict[str, str] = field(default_factory=dict)
+    static_wildcards: list[str] = field(default_factory=list)
+    type_aliases: dict[str, str] = field(default_factory=dict)
+    link_pruned: bool = False

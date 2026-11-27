@@ -216,3 +216,70 @@ def test_locate_ranks_ast_above_containers_and_impact_skips_structural():
     assert impact["total_affected_entities"] == 1
     assert [item["id"] for item in impact["impact_by_depth"][1]] == ["src.api.login"]
     assert impact["affected_files"] == ["src/api.ts"]
+
+
+# language and path_prefix disambiguation in GraphQuery
+def test_query_language_and_path_prefix_filtering() -> None:
+    # arrange
+    g = nx.MultiDiGraph()
+    g.add_node(
+        "waltz-ng.src.api.getById",
+        name="getById",
+        type=NodeType.FUNCTION.value,
+        file_path="waltz-ng/src/api.ts",
+        line_start=1,
+        line_end=5,
+        language_family="js_ts_web",
+    )
+    g.add_node(
+        "waltz-ng.src.view.render",
+        name="render",
+        type=NodeType.FUNCTION.value,
+        file_path="waltz-ng/src/view.ts",
+        line_start=10,
+        line_end=15,
+        language_family="js_ts_web",
+    )
+    g.add_node(
+        "com.waltz.OrderRepo.getById",
+        name="getById",
+        type=NodeType.FUNCTION.value,
+        file_path="waltz-be/src/main/java/com/waltz/OrderRepo.java",
+        line_start=20,
+        line_end=25,
+        language_family="java",
+    )
+    g.add_node(
+        "com.waltz.OrderSvc.load",
+        name="load",
+        type=NodeType.FUNCTION.value,
+        file_path="waltz-be/src/main/java/com/waltz/OrderSvc.java",
+        line_start=30,
+        line_end=35,
+        language_family="java",
+    )
+    g.add_edge("waltz-ng.src.view.render", "waltz-ng.src.api.getById", type=EdgeType.CALLS.value)
+    g.add_edge("com.waltz.OrderSvc.load", "com.waltz.OrderRepo.getById", type=EdgeType.CALLS.value)
+
+    q = GraphQuery(g)
+
+    # act & assert: locate with language aliases and path_prefix
+    loc_java = q.locate("getById", language="java")
+    assert [r["id"] for r in loc_java] == ["com.waltz.OrderRepo.getById"]
+
+    loc_ts = q.locate("getById", language="ts")
+    assert [r["id"] for r in loc_ts] == ["waltz-ng.src.api.getById"]
+
+    loc_prefix = q.locate("getById", path_prefix="./waltz-be/src/")
+    assert [r["id"] for r in loc_prefix] == ["com.waltz.OrderRepo.getById"]
+
+    # act & assert: neighbors and impact_radius with filters
+    nbr_fe = q.neighbors("getById", direction="in", language="js")
+    assert nbr_fe["symbol"] == "waltz-ng.src.api.getById"
+    assert [c["id"] for c in nbr_fe["incoming_callers"]] == ["waltz-ng.src.view.render"]
+
+    imp_be = q.impact_radius("getById", max_depth=2, path_prefix="waltz-be")
+    assert imp_be["target_symbol"] == "com.waltz.OrderRepo.getById"
+    assert imp_be["total_affected_entities"] == 1
+    assert imp_be["affected_files"] == ["waltz-be/src/main/java/com/waltz/OrderSvc.java"]
+

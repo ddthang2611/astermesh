@@ -82,3 +82,91 @@ def test_weighted_god_node_self_loop_exclusion_and_cpm_mode():
     assert len(comms_fine) > len(comms)
     hub_comm = next(c for c in comms_fine if "hub" in c.members)
     assert hub_comm.god_node == "hub"
+
+
+# distinct_ns damping for star inheritance hubs
+def test_distinct_ns_inherits_damping_and_star_hub_exclusion() -> None:
+    # arrange: 1) <=2 namespaces keeps full 2.5 weight
+    g_local = nx.MultiDiGraph()
+    g_local.add_node(
+        "com.waltz.Endpoint",
+        type=NodeType.CLASS.value,
+        name="Endpoint",
+        namespace_fqn="com.waltz",
+        language_family="java",
+    )
+    for i in range(6):
+        ns = "com.waltz.a" if i < 3 else "com.waltz.b"
+        sub = f"{ns}.Sub{i}"
+        g_local.add_node(
+            sub,
+            type=NodeType.CLASS.value,
+            name=f"Sub{i}",
+            namespace_fqn=ns,
+            language_family="java",
+        )
+        g_local.add_edge(sub, "com.waltz.Endpoint", type=EdgeType.INHERITS.value)
+
+    comms_local = CommunityClusterer(
+        seed=0, partition_mode="cpm", resolution_parameter=0.25
+    ).cluster(g_local)
+    assert len(comms_local) == 1
+    assert comms_local[0].god_node == "com.waltz.Endpoint"
+    assert comms_local[0].language_family == "java"
+
+    # arrange: 2) >=5 namespaces scales weight (2.5 / 5 = 0.5)
+    g_mid = nx.MultiDiGraph()
+    g_mid.add_node(
+        "com.core.MidHub",
+        type=NodeType.CLASS.value,
+        name="MidHub",
+        namespace_fqn="com.core",
+        language_family="java",
+    )
+    for ns_idx in range(5):
+        ns = f"com.mod{ns_idx}"
+        a = f"{ns}.SvcA"
+        b = f"{ns}.SvcB"
+        g_mid.add_node(a, type=NodeType.CLASS.value, name="SvcA", namespace_fqn=ns)
+        g_mid.add_node(b, type=NodeType.CLASS.value, name="SvcB", namespace_fqn=ns)
+        g_mid.add_edge(a, "com.core.MidHub", type=EdgeType.INHERITS.value)
+        g_mid.add_edge(b, "com.core.MidHub", type=EdgeType.INHERITS.value)
+        g_mid.add_edge(a, b, type=EdgeType.DEFINES.value)
+        g_mid.add_edge(b, a, type=EdgeType.CALLS.value)
+
+    comms_mid = CommunityClusterer(seed=0, partition_mode="cpm", resolution_parameter=0.5).cluster(
+        g_mid
+    )
+    # local mod pairs stay unified despite scaled cross-ns hub edges
+    assert len(comms_mid) >= 5
+
+    # arrange: 3) >=8 namespaces and >=20 subclasses excluded from Leiden projection
+    g_star = nx.MultiDiGraph()
+    star_hub = "com.core.CommandHandler"
+    g_star.add_node(
+        star_hub,
+        type=NodeType.CLASS.value,
+        name="CommandHandler",
+        namespace_fqn="com.core",
+        language_family="java",
+    )
+    for ns_idx in range(8):
+        ns = f"com.domain{ns_idx}"
+        anchor = f"{ns}.DomainService"
+        g_star.add_node(anchor, type=NodeType.SERVICE.value, name="DomainService", namespace_fqn=ns)
+        for sub_idx in range(3):
+            sub = f"{ns}.Handler{sub_idx}"
+            g_star.add_node(
+                sub, type=NodeType.CLASS.value, name=f"Handler{sub_idx}", namespace_fqn=ns
+            )
+            g_star.add_edge(sub, star_hub, type=EdgeType.INHERITS.value)
+            g_star.add_edge(sub, anchor, type=EdgeType.INJECTS.value)
+
+    comms_star = CommunityClusterer(seed=0).cluster(g_star)
+
+    # assert: star hub isolated from domain clusters, nx_graph edges preserved
+    assert g_star.in_degree(star_hub) == 24
+    star_comm = next(c for c in comms_star if star_hub in c.members)
+    assert star_comm.size == 1
+    assert len([c for c in comms_star if c.size >= 4]) == 8
+

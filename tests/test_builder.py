@@ -210,3 +210,150 @@ def test_deleting_ts_sibling_reindexes_existing_js_fallback(tmp_path: Path):
     assert not g.has_node("src.foo.fromTs")
     assert g.has_node("src/foo.js")
     assert g.has_node("src.foo.fromJs")
+
+
+# update_file relinks incoming cross-file edges
+def test_update_file_relinks_incoming_cross_file_dependents(tmp_path: Path) -> None:
+    # arrange
+    java_dir = tmp_path / "src" / "main" / "java" / "com" / "acme"
+    web_dir = tmp_path / "web" / "src"
+    java_dir.mkdir(parents=True)
+    web_dir.mkdir(parents=True)
+
+    user_svc = java_dir / "UserService.java"
+    user_svc.write_text(
+        """package com.acme;
+
+public class UserService {
+    public String getById(long id) { return "u"; }
+    public void save(String name) {}
+}
+""",
+        encoding="utf-8",
+    )
+    (java_dir / "Main.java").write_text(
+        """package com.acme;
+
+public class Main {
+    private final UserService svc = new UserService();
+    public void run() {
+        svc.getById(1L);
+        svc.save("alice");
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    util_js = web_dir / "util.js"
+    util_js.write_text("export function compute(x) { return x; }\n", encoding="utf-8")
+    (web_dir / "app.js").write_text(
+        "import { compute } from './util.js';\nexport function boot() { return compute(1); }\n",
+        encoding="utf-8",
+    )
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+    assert g.has_edge("com.acme.Main.run", "com.acme.UserService.getById")
+    assert g.has_edge("com.acme.Main.run", "com.acme.UserService.save")
+    assert g.has_edge("web.src.app.boot", "web.src.util.compute")
+
+    # act: incremental update on callee files
+    builder.update_file(user_svc)
+    builder.update_file(util_js)
+
+    # assert: incoming cross-file edges preserved
+    assert g.has_edge("com.acme.Main.run", "com.acme.UserService.getById")
+    assert g.has_edge("com.acme.Main.run", "com.acme.UserService.save")
+    assert g.has_edge("web.src.app.boot", "web.src.util.compute")
+
+
+# update_file relative path and pruned java relink
+def test_update_file_accepts_relative_path_and_relinks_pruned_java(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # arrange
+    java_dir = tmp_path / "src" / "main" / "java" / "com" / "acme"
+    java_dir.mkdir(parents=True)
+    svc = java_dir / "Svc.java"
+    svc.write_text(
+        """package com.acme;
+public class Svc {
+    public void ping() {}
+}
+""",
+        encoding="utf-8",
+    )
+    (java_dir / "App.java").write_text(
+        """package com.acme;
+public class App {
+    private final Svc svc = new Svc();
+    public void run() { svc.ping(); }
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path.parent)
+
+    builder = GraphBuilder(tmp_path)
+    g = builder.build_full()
+    assert builder._index.parsed_files["src/main/java/com/acme/App.java"].link_pruned is True
+    assert g.has_edge("com.acme.App.run", "com.acme.Svc.ping")
+
+    # act: pass workspace-relative path from different cwd
+    svc.write_text(
+        """package com.acme;
+public class Svc {
+    public void ping() {}
+    public void pong() {}
+}
+""",
+        encoding="utf-8",
+    )
+    builder.update_file(Path("src/main/java/com/acme/Svc.java"))
+
+    # assert
+    assert g.has_node("com.acme.Svc.pong")
+    assert g.has_edge("com.acme.App.run", "com.acme.Svc.ping")
+
+
+# disambiguate colliding java fqns across modules
+def test_builder_disambiguates_colliding_java_fqns_across_modules(tmp_path: Path) -> None:
+    # arrange
+    mod_a = tmp_path / "mod-a" / "src" / "test" / "java" / "com" / "acme"
+    mod_b = tmp_path / "mod-b" / "src" / "test" / "java" / "com" / "acme"
+    mod_a.mkdir(parents=True)
+    mod_b.mkdir(parents=True)
+
+    (mod_a / "DupTest.java").write_text(
+        """package com.acme;
+public class DupTest {
+    private int count;
+    public void checkA() {}
+}
+""",
+        encoding="utf-8",
+    )
+    (mod_b / "DupTest.java").write_text(
+        """package com.acme;
+public class DupTest {
+    private int count;
+    public void checkB() {}
+}
+""",
+        encoding="utf-8",
+    )
+
+    # act
+    g = GraphBuilder(tmp_path).build_full()
+
+    # assert: both classes and members survive
+    dup_classes = [
+        nid
+        for nid, d in g.nodes(data=True)
+        if d.get("name") == "DupTest" and d.get("type") == "class"
+    ]
+    assert len(dup_classes) == 2
+    assert any(g.nodes[nid].get("name") == "checkA" for nid in g.nodes)
+    assert any(g.nodes[nid].get("name") == "checkB" for nid in g.nodes)
+

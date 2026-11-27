@@ -211,6 +211,16 @@ def _build_compressed_table_lines(
     return best_lines
 
 
+_RESERVED_ACN2_DELIMITERS: tuple[str, ...] = (",", "@", ":", ">", "^", "~", "&")
+
+
+def _sanitize_acn2_label(label: str) -> str:
+    for ch in _RESERVED_ACN2_DELIMITERS:
+        if ch in label:
+            label = label.replace(ch, "_")
+    return label
+
+
 # disambiguate duplicate bare names per file
 def _build_short_id_map(graph: nx.MultiDiGraph) -> dict[str, str]:
     by_file: dict[str, list[tuple[str, str]]] = {}
@@ -228,15 +238,24 @@ def _build_short_id_map(graph: nx.MultiDiGraph) -> dict[str, str]:
             name_counts[name] = name_counts.get(name, 0) + 1
 
         local_map: dict[str, str] = {}
+        depths: dict[str, int] = {}
         for nid, name in nodes_in_file:
             if name_counts[name] == 1:
-                local_map[nid] = name
+                local_map[nid] = _sanitize_acn2_label(name)
+                depths[nid] = 1
             else:
                 parts = nid.split(".")
-                local_map[nid] = f"{parts[-2]}.{name}" if len(parts) >= 2 else nid
+                if parts[-1] != name:
+                    local_map[nid] = _sanitize_acn2_label(parts[-1])
+                    depths[nid] = 1
+                elif len(parts) >= 2:
+                    local_map[nid] = _sanitize_acn2_label(f"{parts[-2]}.{name}")
+                    depths[nid] = 2
+                else:
+                    local_map[nid] = _sanitize_acn2_label(nid)
+                    depths[nid] = 1
 
         # extend qualifier depth if collisions persist
-        depth = 3
         while True:
             label_counts: dict[str, int] = {}
             for label in local_map.values():
@@ -247,15 +266,18 @@ def _build_short_id_map(graph: nx.MultiDiGraph) -> dict[str, str]:
             progressed = False
             for nid in colliding:
                 parts = nid.split(".")
-                if len(parts) >= depth:
-                    local_map[nid] = ".".join(parts[-depth:])
+                next_depth = depths[nid] + 1
+                if len(parts) >= next_depth:
+                    depths[nid] = next_depth
+                    local_map[nid] = _sanitize_acn2_label(".".join(parts[-next_depth:]))
                     progressed = True
-                elif local_map[nid] != nid:
-                    local_map[nid] = nid
-                    progressed = True
+                else:
+                    full_label = _sanitize_acn2_label(nid)
+                    if local_map[nid] != full_label:
+                        local_map[nid] = full_label
+                        progressed = True
             if not progressed:
                 break
-            depth += 1
 
         short_map.update(local_map)
 
@@ -634,6 +656,94 @@ def _render_l1(
     return "\n".join(lines) + "\n"
 
 
+def _community_language_family(graph: nx.MultiDiGraph, comm: CommunityInfo) -> str:
+    fam = str(getattr(comm, "language_family", "") or "")
+    if fam:
+        return fam
+    counts: dict[str, int] = {}
+    for mid in comm.members:
+        if not graph.has_node(mid):
+            continue
+        mfam = str(graph.nodes[mid].get("language_family") or "")
+        if mfam:
+            counts[mfam] = counts.get(mfam, 0) + 1
+    if not counts:
+        return ""
+    return min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+
+def _fit_l2_communities_with_floor(
+    comm_entries: list[tuple[str, CommunityInfo, str]],
+    comm_families: dict[str, str],
+    functional_families: set[str],
+    budget: int,
+) -> tuple[list[tuple[str, CommunityInfo, str]], set[str], set[str], int, int]:
+    """Reserve minority floor before size packing."""
+    entry_costs: dict[str, int] = {
+        cid: estimate_tokens(line + "\n") for cid, _, line in comm_entries
+    }
+    by_family: dict[str, list[tuple[str, CommunityInfo, str]]] = {
+        fam: [] for fam in functional_families
+    }
+    for cid, comm, line in comm_entries:
+        if comm.size >= 2:
+            fam = comm_families.get(cid, "")
+            if fam in by_family:
+                by_family[fam].append((cid, comm, line))
+
+    majority_fam = max(
+        functional_families,
+        key=lambda f: (
+            sum(c.size for _, c, _ in by_family[f]),
+            sum(entry_costs[cid] for cid, _, _ in by_family[f]),
+            len(by_family[f]),
+            f,
+        ),
+    )
+    minority_fams = sorted(
+        (f for f in functional_families if f != majority_fam),
+        key=lambda f: (-sum(c.size for _, c, _ in by_family[f]), f),
+    )
+
+    floor_ids: set[str] = set()
+    kept_ids: set[str] = set()
+    used_tokens = 0
+
+    for mfam in minority_fams:
+        fam_entries = by_family[mfam]
+        fam_total_cost = sum(entry_costs[cid] for cid, _, _ in fam_entries)
+        fam_floor = min(fam_total_cost, int(budget * 0.20))
+        fam_used = 0
+        fam_count = 0
+        for cid, _, _ in fam_entries:
+            lt = entry_costs[cid]
+            if fam_count > 0 and fam_used >= fam_floor:
+                break
+            if used_tokens + lt <= budget:
+                floor_ids.add(cid)
+                kept_ids.add(cid)
+                used_tokens += lt
+                fam_used += lt
+                fam_count += 1
+            else:
+                break
+
+    for cid, _, _ in comm_entries:
+        if cid in kept_ids:
+            continue
+        lt = entry_costs[cid]
+        if used_tokens + lt <= budget:
+            kept_ids.add(cid)
+            used_tokens += lt
+        else:
+            break
+
+    kept = [(cid, comm, line) for cid, comm, line in comm_entries if cid in kept_ids]
+    omitted_comms = len(comm_entries) - len(kept)
+    omitted_nodes = sum(c.size for cid, c, _ in comm_entries if cid not in kept_ids)
+    return kept, kept_ids, floor_ids, omitted_comms, omitted_nodes
+
+
 def _fit_l2_communities(
     comm_entries: list[tuple[str, CommunityInfo, str]],
     budget: int,
@@ -707,18 +817,53 @@ def _render_l2(
         edge_reserve = min(int(rem * 0.15), 250) if bridge_weights and rem >= 120 else 0
         summary_reserve = 10
         comm_budget = max(0, rem - edge_reserve - summary_reserve)
-        kept_tuples, kept_ids, omitted_c, omitted_n = _fit_l2_communities(comm_entries, comm_budget)
-        if not kept_tuples and comm_entries:
-            kept_tuples, kept_ids, omitted_c, omitted_n = _fit_l2_communities(
-                comm_entries, max(0, rem - summary_reserve)
+        comm_families = {
+            cid: _community_language_family(graph, comm) for cid, comm, _ in comm_entries
+        }
+        functional_families = {
+            comm_families[cid]
+            for cid, comm, _ in comm_entries
+            if comm.size >= 2 and comm_families[cid]
+        }
+        floor_ids: set[str] = set()
+        if len(functional_families) >= 2:
+            kept_tuples, kept_ids, floor_ids, omitted_c, omitted_n = (
+                _fit_l2_communities_with_floor(
+                    comm_entries, comm_families, functional_families, comm_budget
+                )
             )
+            if not kept_tuples and comm_entries:
+                kept_tuples, kept_ids, floor_ids, omitted_c, omitted_n = (
+                    _fit_l2_communities_with_floor(
+                        comm_entries,
+                        comm_families,
+                        functional_families,
+                        max(0, rem - summary_reserve),
+                    )
+                )
+        else:
+            kept_tuples, kept_ids, omitted_c, omitted_n = _fit_l2_communities(
+                comm_entries, comm_budget
+            )
+            if not kept_tuples and comm_entries:
+                kept_tuples, kept_ids, omitted_c, omitted_n = _fit_l2_communities(
+                    comm_entries, max(0, rem - summary_reserve)
+                )
         while kept_tuples:
             trial_base = [header, *[ln for _, _, ln in kept_tuples]]
             if omitted_c > 0:
                 trial_base.append(f"#omitted +{omitted_c}comm|{omitted_n}n")
             if estimate_tokens("\n".join(trial_base) + "\n") <= max_tokens:
                 break
-            _, dropped_c, _ = kept_tuples.pop()
+            drop_idx = next(
+                (
+                    i
+                    for i in range(len(kept_tuples) - 1, -1, -1)
+                    if kept_tuples[i][0] not in floor_ids
+                ),
+                len(kept_tuples) - 1,
+            )
+            _, dropped_c, _ = kept_tuples.pop(drop_idx)
             kept_ids.discard(str(dropped_c.id))
             omitted_c += 1
             omitted_n += dropped_c.size

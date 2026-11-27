@@ -8,7 +8,12 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from astermesh.graph.builder import GraphBuilder
-from astermesh.graph.filters import is_ignored_dir, is_ignored_file, is_saved_webpage_dir
+from astermesh.graph.filters import (
+    is_ignored_dir,
+    is_ignored_file,
+    is_saved_webpage_dir,
+    is_vendor_js_path,
+)
 
 _HANDLED_EVENT_TYPES: frozenset[str] = frozenset({
     "created",
@@ -16,7 +21,7 @@ _HANDLED_EVENT_TYPES: frozenset[str] = frozenset({
     "deleted",
     "moved",
 })
-_CONFIG_FILES: frozenset[str] = frozenset({"tsconfig.json", "jsconfig.json"})
+_BASE_CONFIG_FILES: frozenset[str] = frozenset({"tsconfig.json", "jsconfig.json"})
 
 
 # file system change event handler
@@ -36,17 +41,22 @@ class GraphEventHandler(FileSystemEventHandler):
     def _is_supported_file(self, fpath: Path) -> bool:
         if is_ignored_file(fpath.name):
             return False
-        return self.builder.parser.supports(
-            fpath.suffix.lower()
-        ) or self.builder.satellite.supports(fpath)
+        ext = fpath.suffix.lower()
+        return (
+            self.builder.registry.plugin_for_extension(ext) is not None
+            or self.builder.parser.supports(ext)
+            or self.builder.satellite.supports(fpath)
+        )
 
     # reload resolver config under builder lock
     def _maybe_reload_config(self, *paths: Path) -> bool:
-        if any(p.name in _CONFIG_FILES for p in paths):
+        watch_files = self.builder.registry.all_config_watch_files() | _BASE_CONFIG_FILES
+        if not any(p.name in watch_files for p in paths):
+            return False
+        if any(p.name in _BASE_CONFIG_FILES for p in paths):
             with self.builder.lock:
                 self.builder.resolver.reload_config()
-            return True
-        return False
+        return True
 
     def _is_in_saved_webpage_dir(self, rel: str, is_dir: bool) -> bool:
         parts = rel.split("/")
@@ -72,6 +82,11 @@ class GraphEventHandler(FileSystemEventHandler):
         rel = unicodedata.normalize("NFC", raw_rel)
         if is_ignored_dir(rel):
             return None
+        plugin_ignores = self.builder.registry.all_ignore_dirs()
+        if any(seg in plugin_ignores for seg in Path(rel).parts):
+            return None
+        if is_vendor_js_path(rel):
+            return None
         is_dir = path.is_dir()
         if self.builder.is_excluded(rel, is_dir=is_dir):
             return None
@@ -90,9 +105,13 @@ class GraphEventHandler(FileSystemEventHandler):
 
         if event.event_type == "deleted":
             reloaded = self._maybe_reload_config(src_path)
-            self.builder.remove_path(rel_path)
-            if reloaded or self._is_supported_file(src_path):
+            if not event.is_directory and self._is_supported_file(src_path):
+                self.builder.update_file(src_path)
                 self._schedule_callback()
+            else:
+                self.builder.remove_path(rel_path)
+                if reloaded:
+                    self._schedule_callback()
         elif event.event_type in ("created", "modified"):
             reloaded = self._maybe_reload_config(src_path)
             if not event.is_directory and self._is_supported_file(src_path):
@@ -114,7 +133,10 @@ class GraphEventHandler(FileSystemEventHandler):
             else:
                 reloaded = self._maybe_reload_config(src_path)
 
-            self.builder.remove_path(rel_path)
+            if not event.is_directory and self._is_supported_file(src_path):
+                self.builder.update_file(src_path)
+            else:
+                self.builder.remove_path(rel_path)
             if (
                 dest_path is not None
                 and dest_rel is not None

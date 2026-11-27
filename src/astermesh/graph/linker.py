@@ -5,7 +5,9 @@ import networkx as nx
 
 from astermesh.graph.filters import is_test_path
 from astermesh.graph.model import EdgeType, NodeType
-from astermesh.graph.symbol_index import SymbolIndex
+from astermesh.graph.symbol_index import SymbolIndex, infer_language_family
+from astermesh.languages.base import LanguageLinkStrategy, LinkContext
+from astermesh.languages.registry import LanguageRegistry, default_registry
 from astermesh.parser.resolver import ModuleResolver, is_asset_path
 from astermesh.parser.types import FileParseResult, ImportSpec, RawEntity, ReexportSpec
 
@@ -28,17 +30,61 @@ class RelationLinker:
         index: SymbolIndex,
         resolver: ModuleResolver,
         ensure_asset_fn: Callable[[str], str],
+        registry: LanguageRegistry | None = None,
     ) -> None:
         self.graph = graph
         self.index = index
         self.resolver = resolver
         self._ensure_asset_node = ensure_asset_fn
+        self.registry: LanguageRegistry = registry or default_registry()
+        self._strategies: dict[str, LanguageLinkStrategy] = {}
+
+    def reset_strategies(self) -> None:
+        """Clear cached link strategies."""
+        for strategy in self._strategies.values():
+            strategy.invalidate()
+        self._strategies.clear()
+
+    def invalidate_caches(self) -> None:
+        """Invalidate caches across active link strategies."""
+        for strategy in self._strategies.values():
+            strategy.invalidate()
+
+    def _get_strategy(self, parsed: FileParseResult) -> LanguageLinkStrategy | None:
+        ext = Path(parsed.file_path).suffix.lower() if parsed.file_path else ""
+        plugin = self.registry.plugin_for_extension(ext) if ext else None
+        if plugin is None:
+            family = infer_language_family(parsed.language, parsed.language_family)
+            plugin = self.registry.plugin_for_family(family)
+        if plugin is None:
+            return None
+        if plugin.language_id not in self._strategies:
+            self._strategies[plugin.language_id] = plugin.create_link_strategy(
+                self.resolver.root_path
+            )
+        return self._strategies[plugin.language_id]
+
+    def _make_link_context(self) -> LinkContext:
+        return LinkContext(
+            graph=self.graph,
+            index=self.index,
+            resolver=self.resolver,
+            ensure_asset_fn=self._ensure_asset_node,
+            add_edge_fn=self._add_edge,
+            add_entity_edge_fn=self._add_entity_edge,
+            is_test_path_fn=self.registry.is_test_path,
+        )
 
     def _add_edge(self, u: str, v: str, etype: EdgeType) -> None:
         self.graph.add_edge(u, v, key=etype.value, type=etype.value)
 
     def link_file(self, parsed: FileParseResult) -> None:
         """Link all imports and entity-level relations for a single parsed file."""
+        strategy = self._get_strategy(parsed)
+        if strategy is not None:
+            strategy.link_file(parsed, self._make_link_context())
+            return
+
         rel_file = parsed.file_path
         local_aliases, asset_aliases = self._link_imports(parsed)
         consumed_assets: set[str] = set()

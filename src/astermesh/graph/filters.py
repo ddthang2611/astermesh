@@ -1,6 +1,7 @@
 import fnmatch
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 
 IGNORE_DIRS = frozenset({
@@ -27,8 +28,10 @@ IGNORE_DIRS = frozenset({
 
 IGNORED_FILE_SUFFIXES = (
     ".min.js",
+    "-min.js",
     ".min.css",
     ".bundle.js",
+    "-bundle.js",
     ".iife.js",
     ".umd.js",
     ".esm.min.js",
@@ -41,6 +44,32 @@ IGNORED_FILE_SUFFIXES = (
 
 _DUPLICATE_DOWNLOAD_RE = re.compile(r"\(\d+\)\.[cm]?js$")
 _HASHED_JS_RE = re.compile(r"\.[0-9a-f]{16,}\.[cm]?js$")
+_SWAGGER_UI_RE = re.compile(r"swagger-ui.*\.js$", re.IGNORECASE)
+_WEBAPP_LIB_RE = re.compile(r"(^|/)webapp/lib/", re.IGNORECASE)
+_VENDOR_JS_EXTS = (
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".map",
+)
+_JAVA_TEST_FILE_SUFFIXES = (
+    "Test.java",
+    "Tests.java",
+    "IT.java",
+    "Spec.java",
+    "TestBase.java",
+    "Suite.java",
+    "SuiteNoDB.java",
+)
 _JS_MINIFY_CHECK_EXTS = frozenset({".js", ".mjs", ".cjs"})
 _MAX_UNMINIFIED_JS_BYTES = 512 * 1024
 _JS_MINIFY_SAMPLE_BYTES = 8192
@@ -63,12 +92,46 @@ _TEST_FILE_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=16384)
 def is_test_path(rel_path: str) -> bool:
     """Return True if a workspace-relative path looks like a test file or test fixture."""
     rel = rel_path.replace("\\", "/")
     if _TEST_FILE_RE.search(rel):
         return True
-    return any(p in TEST_DATA_DIRS for p in rel.split("/")[:-1])
+    for seg in rel.split("/")[:-1]:
+        if seg in TEST_DATA_DIRS:
+            return True
+        lower_seg = seg.lower()
+        if lower_seg.endswith("-e2e") or lower_seg.startswith("e2e-"):
+            return True
+    return False
+
+
+def is_vendor_js_path(rel_path: str) -> bool:
+    """Match vendor JS/TS/CSS inside webapp/lib."""
+    rel = rel_path.replace("\\", "/")
+    if not _WEBAPP_LIB_RE.search(rel):
+        return False
+    return rel.lower().endswith(_VENDOR_JS_EXTS)
+
+
+@lru_cache(maxsize=16384)
+def is_java_test_path(rel_path: str) -> bool:
+    """Match Java test paths and files."""
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    if not rel:
+        return False
+    if rel.startswith("src/test/") or "/src/test/" in rel:
+        return True
+    if rel.startswith("integration-tests/") or "/integration-tests/" in rel:
+        return True
+    parts = rel.split("/")
+    dir_parts = parts[:-1]
+    if "e2e-tests" in "/".join(dir_parts).lower():
+        return True
+    if any(seg.lower().endswith(("-test", "-tests")) for seg in dir_parts):
+        return True
+    return parts[-1].endswith(_JAVA_TEST_FILE_SUFFIXES)
 
 
 def is_ignored_dir(path: Path | str) -> bool:
@@ -87,8 +150,12 @@ def is_ignored_file(path: Path | str) -> bool:
     lower = str(path).lower()
     if lower.endswith(IGNORED_FILE_SUFFIXES):
         return True
-    name = Path(lower).name
-    return bool(_DUPLICATE_DOWNLOAD_RE.search(name) or _HASHED_JS_RE.search(name))
+    name = Path(lower.replace("\\", "/")).name
+    return bool(
+        _DUPLICATE_DOWNLOAD_RE.search(name)
+        or _HASHED_JS_RE.search(name)
+        or _SWAGGER_UI_RE.search(name)
+    )
 
 
 def is_saved_webpage_dir(dir_name: str, sibling_files: set[str]) -> bool:

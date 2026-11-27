@@ -237,3 +237,98 @@ def test_resolver_nodenext_js_specifier_maps_to_ts_source(tmp_path: Path) -> Non
     assert disk_resolver.resolve("src/main.ts", "./Bar.jsx")[0] == "src/Bar.tsx"
     assert disk_resolver.resolve("src/main.ts", "./mod.mjs")[0] == "src/mod.mts"
     assert disk_resolver.resolve("src/main.ts", "./cfg.cjs")[0] == "src/cfg.cts"
+
+
+# monorepo sub-root tsconfig resolution
+def test_monorepo_subroot_tsconfig_alias_resolution(tmp_path: Path) -> None:
+    # arrange
+    waltz_ng = tmp_path / "waltz-ng"
+    (waltz_ng / "src" / "common").mkdir(parents=True)
+    (waltz_ng / "src" / "pages").mkdir(parents=True)
+    (waltz_ng / "tsconfig.json").write_text(
+        """{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  }
+}""",
+        encoding="utf-8",
+    )
+    (waltz_ng / "src" / "common" / "format.ts").write_text(
+        "export const fmt = (v: string) => v;\n", encoding="utf-8"
+    )
+    (waltz_ng / "src" / "pages" / "App.ts").write_text("", encoding="utf-8")
+
+    client = tmp_path / "client"
+    (client / "lib").mkdir(parents=True)
+    (client / "tsconfig.json").write_text(
+        """{
+  "compilerOptions": {
+    "baseUrl": "lib",
+    "paths": {
+      "@/*": ["*"]
+    }
+  }
+}""",
+        encoding="utf-8",
+    )
+    (client / "lib" / "api.ts").write_text("export const ping = () => 1;\n", encoding="utf-8")
+    (client / "lib" / "index.ts").write_text("", encoding="utf-8")
+
+    resolver = ModuleResolver(tmp_path)
+
+    # act & assert
+    assert resolver.resolve("waltz-ng/src/pages/App.ts", "@/common/format")[0] == (
+        "waltz-ng/src/common/format.ts"
+    )
+    assert resolver.resolve("client/lib/index.ts", "@/api")[0] == "client/lib/api.ts"
+    assert resolver.resolve("waltz-ng/src/pages/App.ts", "@/api")[0] is None
+
+
+# vendor js, minified, swagger, e2e filters
+def test_vendor_js_minified_swagger_and_e2e_filters(tmp_path: Path) -> None:
+    from astermesh.graph.builder import GraphBuilder
+    from astermesh.graph.filters import is_ignored_file, is_test_path, is_vendor_js_path
+
+    # arrange
+    assert is_vendor_js_path("profiles/killbill/src/main/webapp/lib/jquery-1.8.0.js")
+    assert not is_vendor_js_path("profiles/killbill/src/main/webapp/app/main.js")
+    assert is_ignored_file("backbone-min.js")
+    assert is_ignored_file("vendor-bundle.js")
+    assert is_ignored_file("swagger-ui.js")
+    assert is_ignored_file("swagger-ui-bundle.js")
+    assert is_test_path("waltz-e2e/tests/login.ts")
+    assert is_test_path("e2e-suite/checkout.js")
+
+    lib_dir = tmp_path / "profiles" / "killbill" / "src" / "main" / "webapp" / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "jquery.js").write_text("function jQuery() {}\n", encoding="utf-8")
+    (lib_dir / "backbone-min.js").write_text("function bb() {}\n", encoding="utf-8")
+    (tmp_path / "app-bundle.js").write_text("export const x = 1;\n", encoding="utf-8")
+    (tmp_path / "swagger-ui-standalone.js").write_text("export const s = 1;\n", encoding="utf-8")
+
+    e2e_dir = tmp_path / "waltz-e2e" / "specs"
+    e2e_dir.mkdir(parents=True)
+    (e2e_dir / "flow.ts").write_text("export function e2eHelper() {}\n", encoding="utf-8")
+    (e2e_dir / "fixture.json").write_text('{"k": 1}\n', encoding="utf-8")
+
+    app_dir = tmp_path / "waltz-ng" / "src"
+    app_dir.mkdir(parents=True)
+    (app_dir / "main.ts").write_text(
+        "export function boot() { return e2eHelper(); }\n", encoding="utf-8"
+    )
+
+    # act
+    graph = GraphBuilder(tmp_path).build_full()
+
+    # assert
+    assert not graph.has_node("profiles/killbill/src/main/webapp/lib/jquery.js")
+    assert not graph.has_node("profiles/killbill/src/main/webapp/lib/backbone-min.js")
+    assert not graph.has_node("app-bundle.js")
+    assert not graph.has_node("swagger-ui-standalone.js")
+    assert not graph.has_node("waltz-e2e/specs/fixture.json")
+    assert graph.has_node("waltz-ng.src.main.boot")
+    assert not graph.has_edge("waltz-ng.src.main.boot", "waltz-e2e.specs.flow.e2eHelper")
+

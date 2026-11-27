@@ -87,7 +87,7 @@ SEMANTIC_IMPACT_EDGES: frozenset[str] = WIRE_EDGE_TYPES | {
 
 
 # graph entity node schema
-@dataclass
+@dataclass(slots=True)
 class EntityNode:
     id: str
     name: str
@@ -100,6 +100,8 @@ class EntityNode:
     is_method: bool = False
     is_exported: bool = False
     community_id: str | None = None
+    language_family: str = ""
+    namespace_fqn: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -114,14 +116,17 @@ class EntityNode:
             "is_method": self.is_method,
             "is_exported": self.is_exported,
             "community_id": self.community_id,
+            "language_family": self.language_family,
+            "namespace_fqn": self.namespace_fqn,
         }
 
 
 # community cluster metadata
-@dataclass
+@dataclass(slots=True)
 class CommunityInfo:
     id: str
     name: str
     god_node: str
     size: int
     members: list[str] = field(default_factory=list)
+    language_family: str = ""

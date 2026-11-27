@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from collections.abc import Sequence
 from pathlib import Path
@@ -11,7 +12,6 @@ from astermesh.graph.filters import (
     TEST_DATA_DIRS,
     is_ignored_dir,
     is_ignored_file,
-    is_minified_js,
     is_saved_webpage_dir,
     is_test_path,
     load_gitignore_patterns,
@@ -20,9 +20,11 @@ from astermesh.graph.filters import (
 from astermesh.graph.linker import RelationLinker
 from astermesh.graph.model import EdgeType, EntityNode, NodeType
 from astermesh.graph.symbol_index import SymbolIndex
+from astermesh.languages.registry import LanguageRegistry, default_registry
 from astermesh.parser.engine import ASTEngine
 from astermesh.parser.resolver import ModuleResolver
 from astermesh.parser.satellite import SatelliteParser
+from astermesh.parser.types import FileParseResult
 
 __all__ = [
     "IGNORED_FILE_SUFFIXES",
@@ -34,24 +36,8 @@ __all__ = [
     "is_test_path",
 ]
 
-_JS_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs"})
-_TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
-_JS_FALLBACK_SUFFIXES: dict[str, tuple[str, ...]] = {
-    ".ts": (".js", ".jsx", ".mjs", ".cjs"),
-    ".tsx": (".jsx", ".js", ".mjs", ".cjs"),
-    ".mts": (".mjs", ".js", ".jsx", ".cjs"),
-    ".cts": (".cjs", ".js", ".jsx", ".mjs"),
-}
 
-
-def _has_ts_sibling(fpath: Path) -> bool:
-    """True when `fpath` is a JS file emitted next to a same-named TS source.
-
-    Both map to the same module FQN, so indexing both makes their nodes collide.
-    """
-    if fpath.suffix.lower() not in _JS_SUFFIXES:
-        return False
-    return any(fpath.with_suffix(s).is_file() for s in _TS_SUFFIXES)
+_COLLISION_TAG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 # in-memory graph management and incremental updater
@@ -61,6 +47,7 @@ class GraphBuilder:
         root_path: Path,
         exclude_patterns: Sequence[str] | None = None,
         respect_gitignore: bool = False,
+        registry: LanguageRegistry | None = None,
     ) -> None:
         self.root_path = root_path.resolve()
         patterns: list[str] = list(exclude_patterns) if exclude_patterns else []
@@ -68,14 +55,19 @@ class GraphBuilder:
             patterns.extend(load_gitignore_patterns(self.root_path))
         self.exclude_patterns: tuple[str, ...] = tuple(patterns)
         self.respect_gitignore = respect_gitignore
+        self.registry: LanguageRegistry = registry or default_registry()
         self.graph = nx.MultiDiGraph()
-        self.parser = ASTEngine()
+        self.parser = ASTEngine(registry=self.registry)
         self.satellite = SatelliteParser()
         self.resolver = ModuleResolver(self.root_path)
         self.lock = threading.RLock()
         self._index = SymbolIndex()
         self._linker = RelationLinker(
-            self.graph, self._index, self.resolver, self._ensure_asset_node
+            self.graph,
+            self._index,
+            self.resolver,
+            self._ensure_asset_node,
+            registry=self.registry,
         )
 
     def is_excluded(self, rel_posix: str, is_dir: bool = False) -> bool:
@@ -95,6 +87,7 @@ class GraphBuilder:
         with self.lock:
             self.graph.clear()
             self._index.clear()
+            self._linker.reset_strategies()
             self.resolver.reload_config()
 
             self._scan_filesystem()
@@ -102,7 +95,24 @@ class GraphBuilder:
 
             for parsed in list(self._index.parsed_files.values()):
                 self._linker.link_file(parsed)
+            self._prune_link_payloads()
+            self._linker.invalidate_caches()
             return self.graph
+
+    def _prune_link_payloads(self) -> None:
+        for parsed in self._index.parsed_files.values():
+            if parsed.language != "java":
+                continue
+            for ent in parsed.entities:
+                if ent.call_sites:
+                    ent.call_sites.clear()
+                if ent.var_types:
+                    ent.var_types.clear()
+                if ent.local_names:
+                    ent.local_names.clear()
+                if ent.calls:
+                    ent.calls.clear()
+            parsed.link_pruned = True
 
     # pass 1: scan directories and register symbols
     def _scan_filesystem(self) -> None:
@@ -113,6 +123,7 @@ class GraphBuilder:
             file_path=".",
         )
         self.graph.add_node(".", **root_node.to_dict())
+        plugin_ignores = self.registry.all_ignore_dirs()
 
         for dirpath, dirnames, filenames in os.walk(self.root_path):
             curr_dir = Path(dirpath)
@@ -120,7 +131,11 @@ class GraphBuilder:
             sibling_lower = {f.lower() for f in filenames}
             kept_dirs: list[str] = []
             for d in dirnames:
-                if is_ignored_dir(d) or is_saved_webpage_dir(d, sibling_lower):
+                if (
+                    is_ignored_dir(d)
+                    or d in plugin_ignores
+                    or is_saved_webpage_dir(d, sibling_lower)
+                ):
                     continue
                 rel_sub = d if rel_dir == "." else f"{rel_dir}/{d}"
                 if self.is_excluded(rel_sub, is_dir=True):
@@ -147,6 +162,9 @@ class GraphBuilder:
     def _is_indexable(self, fpath: Path) -> bool:
         if is_ignored_file(fpath.name):
             return False
+        plugin = self.registry.plugin_for_extension(fpath.suffix.lower())
+        if plugin is None and not self.satellite.supports(fpath):
+            return False
         # reject external and internal duplicate symlinks
         try:
             resolved = fpath.resolve()
@@ -157,12 +175,45 @@ class GraphBuilder:
             return False
         if self.is_excluded(rel, is_dir=False):
             return False
-        if self.parser.supports(fpath.suffix.lower()):
-            return not _has_ts_sibling(fpath) and not is_minified_js(fpath)
-        if not self.satellite.supports(fpath):
-            return False
+        if plugin is not None:
+            return plugin.should_index(fpath, self.root_path, rel)
         # json/yaml fixtures under test folders flood the graph with config nodes
-        return not is_test_path(rel)
+        return not self.registry.is_test_path(rel)
+
+    def _disambiguate_colliding_fqns(self, parsed: FileParseResult, rel_file: str) -> None:
+        mod_tag = _COLLISION_TAG_RE.sub("_", rel_file.split("/", 1)[0]) or "dup"
+        fqn_remap: dict[str, str] = {}
+        for ent in parsed.entities:
+            if ent.parent_fqn and ent.parent_fqn in fqn_remap:
+                old_parent = ent.parent_fqn
+                new_parent = fqn_remap[old_parent]
+                ent.parent_fqn = new_parent
+                if ent.fqn.startswith(f"{old_parent}."):
+                    new_fqn = f"{new_parent}{ent.fqn[len(old_parent) :]}"
+                else:
+                    new_fqn = f"{ent.fqn}#{mod_tag}"
+                if ent.fqn != new_fqn:
+                    fqn_remap[ent.fqn] = new_fqn
+                    ent.fqn = new_fqn
+            elif (
+                self.graph.has_node(ent.fqn)
+                and self.graph.nodes[ent.fqn].get("file_path") != rel_file
+            ):
+                cand = f"{ent.fqn}#{mod_tag}"
+                suffix_idx = 2
+                while (
+                    self.graph.has_node(cand)
+                    and self.graph.nodes[cand].get("file_path") != rel_file
+                ):
+                    cand = f"{ent.fqn}#{mod_tag}_{suffix_idx}"
+                    suffix_idx += 1
+                fqn_remap[ent.fqn] = cand
+                ent.fqn = cand
+
+        if fqn_remap and parsed.type_aliases:
+            for alias, target in list(parsed.type_aliases.items()):
+                if target in fqn_remap:
+                    parsed.type_aliases[alias] = fqn_remap[target]
 
     def _index_single_file(self, fpath: Path, parent_dir: str) -> str | None:
         rel_file = fpath.relative_to(self.root_path).as_posix()
@@ -174,11 +225,19 @@ class GraphBuilder:
         if not parsed:
             return None
 
+        self._disambiguate_colliding_fqns(parsed, rel_file)
+
+        file_family = parsed.language_family or (
+            "satellite" if parsed.language == "satellite" else ""
+        )
+        file_ns = parsed.namespace_fqn or parsed.module_fqn
         file_node = EntityNode(
             id=rel_file,
             name=fpath.name,
             node_type=NodeType.FILE,
             file_path=rel_file,
+            language_family=file_family,
+            namespace_fqn=file_ns,
         )
         self.graph.add_node(rel_file, **file_node.to_dict())
         self._add_edge(parent_dir, rel_file, EdgeType.CONTAINS)
@@ -197,6 +256,8 @@ class GraphBuilder:
                 is_async=ent.is_async,
                 is_method=ent.is_method,
                 is_exported=ent.is_exported,
+                language_family=ent.language_family or parsed.language_family or "satellite",
+                namespace_fqn=ent.namespace_fqn or parsed.namespace_fqn or parsed.module_fqn,
             )
             self.graph.add_node(ent.fqn, **enode.to_dict())
             created_nodes.add(ent.fqn)
@@ -230,30 +291,76 @@ class GraphBuilder:
         if indexed and indexed in self._index.parsed_files:
             self._linker.link_file(self._index.parsed_files[indexed])
 
+    def _collect_incoming_dependents(self, rel_file: str) -> set[str]:
+        dependents: set[str] = set()
+        target_nodes = set(self._index.file_nodes.get(rel_file, ())) | {rel_file}
+        for nid in target_nodes:
+            if not self.graph.has_node(nid):
+                continue
+            for src_id, _, data in self.graph.in_edges(nid, data=True):
+                if data.get("type") == EdgeType.CONTAINS.value:
+                    continue
+                src_file = self.graph.nodes[src_id].get("file_path")
+                if (
+                    isinstance(src_file, str)
+                    and src_file != rel_file
+                    and src_file in self._index.parsed_files
+                ):
+                    dependents.add(src_file)
+        return dependents
+
+    def _relink_dependents(self, dependents: set[str], excluded_file: str) -> None:
+        for dep in sorted(dependents):
+            if dep == excluded_file or dep not in self._index.parsed_files:
+                continue
+            parsed_dep = self._index.parsed_files[dep]
+            if parsed_dep.link_pruned:
+                fresh = self.parser.parse_file(self.root_path / dep, self.root_path)
+                if fresh is not None:
+                    if len(fresh.entities) == len(parsed_dep.entities):
+                        for f_ent, p_ent in zip(fresh.entities, parsed_dep.entities, strict=True):
+                            f_ent.fqn = p_ent.fqn
+                            f_ent.parent_fqn = p_ent.parent_fqn
+                    self._linker.link_file(fresh)
+                    continue
+            self._linker.link_file(parsed_dep)
+
     # incremental update for file modification or deletion
     def update_file(self, fpath: Path) -> None:
         with self.lock:
             try:
-                resolved = fpath.resolve()
+                candidate = fpath if fpath.is_absolute() else (self.root_path / fpath)
+                resolved = candidate.resolve()
                 rel_file = resolved.relative_to(self.root_path).as_posix()
             except (OSError, ValueError):
                 return
-            if fpath.is_symlink() and resolved != fpath.parent.resolve() / fpath.name:
+            if candidate.is_symlink() and resolved != candidate.parent.resolve() / candidate.name:
                 return
+            dependents = self._collect_incoming_dependents(rel_file)
             self.remove_path(rel_file)
-            if fpath.exists() and fpath.is_file() and self._is_indexable(fpath):
-                self._index_and_link(fpath)
+            self._linker.invalidate_caches()
+            if resolved.exists() and resolved.is_file() and self._is_indexable(resolved):
+                self._index_and_link(resolved)
+                self._relink_dependents(dependents, rel_file)
                 return
             self.resolver.set_known_files(set(self._index.parsed_files.keys()))
-            if not fpath.exists():
-                for js_ext in _JS_FALLBACK_SUFFIXES.get(fpath.suffix.lower(), ()):
-                    cand = fpath.with_suffix(js_ext)
-                    if cand.exists() and cand.is_file() and self._is_indexable(cand):
-                        self._index_and_link(cand)
-                        break
+            if not resolved.exists():
+                plugin = self.registry.plugin_for_extension(resolved.suffix.lower())
+                if plugin is not None:
+                    for cand in plugin.on_file_removed(resolved, self.root_path):
+                        cand_resolved = cand.resolve()
+                        if (
+                            cand_resolved.exists()
+                            and cand_resolved.is_file()
+                            and self._is_indexable(cand_resolved)
+                        ):
+                            self._index_and_link(cand_resolved)
+                            break
+            self._relink_dependents(dependents, rel_file)
 
     def remove_path(self, rel_path: str) -> None:
         with self.lock:
+            self._linker.invalidate_caches()
             nodes_to_remove = self._index.unregister_file(rel_path)
             for nid in nodes_to_remove:
                 if self.graph.has_node(nid):

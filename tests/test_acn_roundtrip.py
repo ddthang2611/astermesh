@@ -642,3 +642,128 @@ def test_l2_hard_cap_many_communities_and_single_community_l1_budget() -> None:
     assert estimate_tokens(wire_c1) <= 600
     assert len(decoded_c1.communities["C1"].symbols) >= 1
     assert len(decoded_c1.files) < 50
+
+
+# lossless L0 round-trip on java overloads and constructors
+def test_java_overloads_and_constructors_acn2_l0_roundtrip(tmp_path: Path) -> None:
+    # arrange
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "acme"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "PaymentRouter.java").write_text(
+        """package com.acme;
+
+public class PaymentRouter {
+    public PaymentRouter() {}
+    public PaymentRouter(String mode) {}
+
+    public void route(String id) {}
+    public void route(int code) {}
+    public void route(String id, int retries) {}
+
+    public void dispatch() {
+        PaymentRouter r = new PaymentRouter("fast");
+        r.route("tx-1");
+        r.route(200);
+        r.route("tx-2", 3);
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    graph = GraphBuilder(tmp_path).build_full()
+    comms = CommunityClusterer(seed=0).cluster(graph)
+
+    # act
+    wire = render_compact_wire(graph, comms, "java_demo")
+    decoded = _decode_acn2(wire)
+
+    # assert: lossless L0 decoding with delimiter-safe short ids
+    assert decoded.mode == "L0"
+    all_syms = [s for c in decoded.communities.values() for s in c.symbols] + decoded.unclustered
+    short_ids = {s.short_id for s in all_syms}
+    assert all(not any(ch in sid for ch in (",", "@", ":", ">")) for sid in short_ids)
+    assert "$init#0" in short_ids
+    assert "$init#1" in short_ids
+    assert "route(String)" in short_ids
+    assert "route(int)" in short_ids
+    assert "route#2" in short_ids
+
+    dispatch_sym = next(s for s in all_syms if s.short_id == "dispatch")
+    call_targets = {tgt.split("::", 1)[1] for op, tgt in dispatch_sym.edges if op == ">"}
+    assert {"$init#1", "route(String)", "route(int)", "route#2"}.issubset(call_targets)
+
+
+# L2 multi-language minority-family floor allocation
+def test_l2_multilang_minority_family_floor_allocation() -> None:
+    # arrange: 40 large java communities + 4 smaller js_ts_web communities
+    g = nx.MultiDiGraph()
+    comms: list[CommunityInfo] = []
+
+    for i in range(1, 41):
+        fpath = f"be/src/main/java/com/acme/Svc{i:02d}.java"
+        g.add_node(fpath, type=NodeType.FILE.value, file_path=fpath, language_family="java")
+        members: list[str] = []
+        god = f"com.acme.Svc{i:02d}.Hub{i:02d}"
+        for j in range(1, 11):
+            nid = god if j == 1 else f"com.acme.Svc{i:02d}.fn{j}"
+            g.add_node(
+                nid,
+                name=f"Hub{i:02d}" if j == 1 else f"fn{j}",
+                type=NodeType.SERVICE.value if j == 1 else NodeType.FUNCTION.value,
+                file_path=fpath,
+                line_start=j * 2,
+                line_end=j * 2 + 1,
+                language_family="java",
+            )
+            members.append(nid)
+        comms.append(
+            CommunityInfo(
+                id=f"C{i}",
+                name=f"Hub{i:02d}",
+                god_node=god,
+                size=len(members),
+                members=members,
+                language_family="java",
+            )
+        )
+
+    for k in range(1, 5):
+        fpath = f"fe/src/views/View{k}.ts"
+        g.add_node(fpath, type=NodeType.FILE.value, file_path=fpath, language_family="js_ts_web")
+        god = f"fe.views.View{k}.Page{k}"
+        leaf = f"fe.views.View{k}.load{k}"
+        for idx, nid in enumerate((god, leaf), start=1):
+            g.add_node(
+                nid,
+                name=f"Page{k}" if idx == 1 else f"load{k}",
+                type=NodeType.COMPONENT.value if idx == 1 else NodeType.FUNCTION.value,
+                file_path=fpath,
+                line_start=idx * 3,
+                line_end=idx * 3 + 1,
+                language_family="js_ts_web",
+            )
+        comms.append(
+            CommunityInfo(
+                id=f"C{40 + k}",
+                name=f"Page{k}",
+                god_node=god,
+                size=2,
+                members=[god, leaf],
+                language_family="js_ts_web",
+            )
+        )
+
+    # act: tight budget triggers L2 packing with minority floor
+    budget = 350
+    wire = render_compact_wire(g, comms, "bilingual", max_tokens=budget)
+    decoded = _decode_acn2(wire)
+
+    # assert: L2 stays within budget and preserves minority js_ts_web communities
+    assert decoded.mode == "L2"
+    assert estimate_tokens(wire) <= budget
+    kept_ids = set(decoded.communities.keys())
+    assert any(cid in kept_ids for cid in ("C41", "C42", "C43", "C44"))
+    assert any(cid in kept_ids for cid in (f"C{i}" for i in range(1, 41)))
+    assert "#omitted +" in wire
+

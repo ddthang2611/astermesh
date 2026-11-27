@@ -1,9 +1,42 @@
-from itertools import islice
+from collections import deque
 from pathlib import Path
 
 import networkx as nx
 
 from astermesh.graph.model import CommunityInfo, EdgeType, NodeType
+
+
+# bounded bfs for shortest scc cycle
+def _shortest_scc_cycle(
+    graph: nx.DiGraph,
+    scc: set[str],
+    max_depth: int = 8,
+) -> list[str] | None:
+    start = min(scc)
+    parent: dict[str, str] = {}
+    visited: set[str] = {start}
+    queue: deque[tuple[str, int]] = deque([(start, 0)])
+
+    while queue:
+        curr, depth = queue.popleft()
+        if depth >= max_depth:
+            continue
+        for nbr in sorted(graph.successors(curr)):
+            if nbr not in scc:
+                continue
+            if nbr == start:
+                cycle = [curr]
+                node = curr
+                while node != start:
+                    node = parent[node]
+                    cycle.append(node)
+                cycle.reverse()
+                return cycle
+            if nbr not in visited:
+                visited.add(nbr)
+                parent[nbr] = curr
+                queue.append((nbr, depth + 1))
+    return None
 
 
 # pure in-memory markdown report renderer
@@ -43,7 +76,16 @@ def render_markdown_report(
 
     cycles: list[list[str]] = []
     try:
-        cycles = list(islice(nx.simple_cycles(file_import_graph), 3))
+        sccs = [
+            scc
+            for scc in nx.strongly_connected_components(file_import_graph)
+            if len(scc) > 1
+        ]
+        sccs.sort(key=lambda s: (-len(s), min(s)))
+        for scc in sccs[:3]:
+            cyc = _shortest_scc_cycle(file_import_graph, scc, max_depth=8)
+            if cyc:
+                cycles.append(cyc)
     except (nx.NetworkXError, ValueError):
         cycles = []
 

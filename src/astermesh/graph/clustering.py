@@ -2,7 +2,7 @@ import igraph as ig
 import leidenalg
 import networkx as nx
 
-from astermesh.graph.model import EDGE_WEIGHTS, LOGIC_NODE_TYPES, CommunityInfo
+from astermesh.graph.model import EDGE_WEIGHTS, LOGIC_NODE_TYPES, CommunityInfo, EdgeType
 
 LOGIC_TYPES = set(LOGIC_NODE_TYPES)
 
@@ -27,15 +27,43 @@ class CommunityClusterer:
             return []
 
         node_to_idx: dict[str, int] = {n: i for i, n in enumerate(logic_nodes)}
+
+        # count distinct incoming inheritance namespaces
+        inherits_ns: dict[str, set[str]] = {}
+        inherits_in_count: dict[str, int] = {}
+        inherits_type = EdgeType.INHERITS.value
+        for u, v, data in nx_graph.edges(data=True):
+            if (
+                data.get("type") == inherits_type
+                and u in node_to_idx
+                and v in node_to_idx
+                and u != v
+            ):
+                ns = str(
+                    nx_graph.nodes[u].get("namespace_fqn")
+                    or nx_graph.nodes[u].get("file_path")
+                    or u
+                )
+                if ns:
+                    inherits_ns.setdefault(v, set()).add(ns)
+                inherits_in_count[v] = inherits_in_count.get(v, 0) + 1
+
         # symmetric weighted undirected projection without self-loops
         pair_weights: dict[tuple[int, int], float] = {}
         for u, v, data in nx_graph.edges(data=True):
             if u in node_to_idx and v in node_to_idx and u != v:
+                etype = str(data.get("type", ""))
+                w = EDGE_WEIGHTS.get(etype, 1.0)
+                if etype == inherits_type:
+                    distinct_ns = len(inherits_ns.get(v, ()))
+                    in_count = inherits_in_count.get(v, 0)
+                    if distinct_ns >= 8 and in_count >= 20:
+                        continue
+                    if distinct_ns >= 5:
+                        w = w / distinct_ns
                 iu = node_to_idx[u]
                 iv = node_to_idx[v]
                 pair = (iu, iv) if iu < iv else (iv, iu)
-                etype = data.get("type", "")
-                w = EDGE_WEIGHTS.get(etype, 1.0)
                 pair_weights[pair] = pair_weights.get(pair, 0.0) + w
 
         edges = list(pair_weights.keys())
@@ -77,9 +105,18 @@ class CommunityClusterer:
             short_god = nx_graph.nodes[god_node].get("name", god_node)
             cid = f"C{cid_idx + 1}"
 
+            fam_counts: dict[str, int] = {}
             for m in members:
                 nx_graph.nodes[m]["community_id"] = cid
+                fam = str(nx_graph.nodes[m].get("language_family") or "")
+                if fam:
+                    fam_counts[fam] = fam_counts.get(fam, 0) + 1
 
+            dominant_family = (
+                min(fam_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                if fam_counts
+                else ""
+            )
             communities.append(
                 CommunityInfo(
                     id=cid,
@@ -87,6 +124,7 @@ class CommunityClusterer:
                     god_node=god_node,
                     size=len(members),
                     members=members,
+                    language_family=dominant_family,
                 )
             )
 
